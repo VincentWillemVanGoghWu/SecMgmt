@@ -1,0 +1,13 @@
+.git
+.idea
+.vscode
+.deploy-cache
+bin
+media
+sql
+frontend
+frontend/node_modules
+frontend/dist
+third_party/HCNetSDK_Win64
+third_party/WebSDK_noPlugin
+third_party/HCNetSDK_Linux64/开发文档
