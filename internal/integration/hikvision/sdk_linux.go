@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -307,6 +308,7 @@ func (s *SDK) SetAlarmHandler(handler AlarmHandler) error {
 	if C.hik_set_alarm_callback() == 0 {
 		return fmt.Errorf("NET_DVR_SetDVRMessageCallBack_V31 failed, code=%d", s.lastErrorCode())
 	}
+	debugAlarmf("alarm callback registered")
 	return nil
 }
 
@@ -360,6 +362,7 @@ func (s *SDK) SetupMotionAlarm(userID int32) (int32, error) {
 	if handle < 0 {
 		return -1, fmt.Errorf("NET_DVR_SetupAlarmChan_V41 failed, code=%d", s.lastErrorCode())
 	}
+	debugAlarmf("alarm channel setup succeeded userID=%d handle=%d", userID, handle)
 	return handle, nil
 }
 
@@ -545,6 +548,7 @@ func (s *SDK) messageCallback(command int32, pAlarmer unsafe.Pointer, pAlarmInfo
 		userID = item.UserID
 		deviceIP = decodeCString(item.DeviceIP[:])
 	}
+	debugAlarmf("raw callback command=0x%x userID=%d deviceIP=%q hasAlarmInfo=%t", command, userID, deviceIP, pAlarmInfo != nil)
 
 	s.mu.RLock()
 	handler := s.handler
@@ -553,6 +557,7 @@ func (s *SDK) messageCallback(command int32, pAlarmer unsafe.Pointer, pAlarmInfo
 
 	isMotion, channels := parseMotionAlarm(command, uintptr(pAlarmInfo))
 	if !isMotion {
+		debugAlarmf("ignored callback command=0x%x userID=%d deviceIP=%q sessionMatched=%t", command, userID, deviceIP, ok)
 		return true
 	}
 	if ok {
@@ -564,6 +569,7 @@ func (s *SDK) messageCallback(command int32, pAlarmer unsafe.Pointer, pAlarmInfo
 	if len(channels) == 0 {
 		channels = []int{1}
 	}
+	debugAlarmf("motion callback command=0x%x userID=%d deviceIP=%q sessionMatched=%t channels=%v", command, userID, deviceIP, ok, channels)
 	if handler != nil {
 		go handler(MotionAlarm{
 			UserID:   userID,
@@ -984,6 +990,13 @@ func maxInt(left, right int) int {
 		return left
 	}
 	return right
+}
+
+func debugAlarmf(format string, args ...any) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("HIKVISION_ALARM_DEBUG"))) {
+	case "1", "true", "yes", "on":
+		log.Printf("[hikvision-alarm-debug] "+format, args...)
+	}
 }
 
 func firstExistingPath(paths ...string) (string, error) {
