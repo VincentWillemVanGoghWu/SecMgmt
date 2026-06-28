@@ -171,6 +171,7 @@ const PLAYBACK_SPEED_STEPS = [0.5, 1, 2, 4, 8] as const
 const downloadState = playbackDownloadState
 const recordedDayKeys = ref<Set<string>>(new Set())
 const recordedDaysLoading = ref(false)
+const rangePickerVisible = ref(false)
 const rangePickerPanelDates = ref<Date[]>([])
 let recordedDaysRequestToken = 0
 const recordedDaysCache = new Map<string, string[]>()
@@ -463,6 +464,7 @@ const loadRecordedDaysForPanel = async (panelDates?: Date[]) => {
 }
 
 const handleRangePickerVisibleChange = (visible: boolean) => {
+  rangePickerVisible.value = visible
   if (!visible) {
     return
   }
@@ -524,7 +526,7 @@ watch(
     }
     hikPlaybackConfig.value = null
     resetRecordedDayHighlights()
-    if (playback.playbackMode === "hik" && channelId) {
+    if (playback.playbackMode === "hik" && channelId && rangePickerVisible.value) {
       void loadRecordedDaysForPanel(getInitialRangePickerPanelDates())
     }
   },
@@ -534,7 +536,7 @@ watch(
   () => playback.playbackMode,
   (mode) => {
     resetRecordedDayHighlights()
-    if (mode === "hik" && queryForm.channelId) {
+    if (mode === "hik" && queryForm.channelId && rangePickerVisible.value) {
       void loadRecordedDaysForPanel(getInitialRangePickerPanelDates())
     }
   },
