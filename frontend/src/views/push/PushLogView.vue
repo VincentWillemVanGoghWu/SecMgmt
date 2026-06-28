@@ -253,12 +253,12 @@ onMounted(async () => {
             <th style="width: 100px">配置名称</th>
             <th style="width: 120px">告警信息</th>
             <th style="width: 160px">厂区 / 区域</th>
-            <th style="width: 100px">状态</th>
-            <th style="width: 100px">触发方式</th>
-            <th style="width: 420px">消息</th>
-            <th style="width: 90px">重试次数</th>
-            <th style="width: 160px">推送时间</th>
-            <th style="width: 120px">操作</th>
+            <th style="width: 80px">状态</th>
+            <th style="width: 60px">触发方式</th>
+            <th>消息</th>
+            <th style="width: 70px">重试次数</th>
+            <th style="width: 120px">推送时间</th>
+            <th style="width: 80px">操作</th>
           </tr>
         </thead>
         <tbody>
