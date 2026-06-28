@@ -250,15 +250,15 @@ onMounted(async () => {
       <table class="app-table unified-list-page__table">
         <thead>
           <tr>
-            <th>配置名称</th>
-            <th>告警信息</th>
-            <th>厂区 / 区域</th>
-            <th>状态</th>
-            <th>触发方式</th>
-            <th>消息</th>
-            <th>重试次数</th>
-            <th>推送时间</th>
-            <th>操作</th>
+            <th style="width: 100px">配置名称</th>
+            <th style="width: 120px">告警信息</th>
+            <th style="width: 160px">厂区 / 区域</th>
+            <th style="width: 100px">状态</th>
+            <th style="width: 100px">触发方式</th>
+            <th style="width: 420px">消息</th>
+            <th style="width: 90px">重试次数</th>
+            <th style="width: 160px">推送时间</th>
+            <th style="width: 120px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -266,37 +266,37 @@ onMounted(async () => {
             <td colspan="9" class="app-table__empty">{{ loading ? "加载中..." : "暂无数据" }}</td>
           </tr>
           <tr v-for="record in records" :key="record.id">
-            <td>
+            <td style="width: 160px">
               <div class="push-log-page__stack unified-list-page__stack-cell">
                 <strong>{{ record.configName || "-" }}</strong>
                 <span>{{ getChannelText(record.channel) }} / {{ record.providerType }}</span>
               </div>
             </td>
-            <td>
+            <td style="width: 180px">
               <div class="push-log-page__stack unified-list-page__stack-cell">
                 <strong>{{ record.alarmType || "测试消息" }}</strong>
                 <span>{{ record.alarmNo || "无关联告警" }}</span>
                 <StatusTag v-if="record.alarmLevel" :text="getLevelText(record.alarmLevel)" :tone="getLevelTone(record.alarmLevel)" />
               </div>
             </td>
-            <td>
+            <td style="width: 160px">
               <div class="push-log-page__stack unified-list-page__stack-cell">
                 <strong>{{ record.factoryName || "-" }}</strong>
                 <span>{{ record.zoneName || "-" }}</span>
               </div>
             </td>
-            <td><StatusTag :text="getStatusText(record.status)" :tone="getStatusTone(record.status)" /></td>
-            <td>{{ getTriggeredByText(record.triggeredBy) }}</td>
-            <td>
+            <td style="width: 100px"><StatusTag :text="getStatusText(record.status)" :tone="getStatusTone(record.status)" /></td>
+            <td style="width: 100px">{{ getTriggeredByText(record.triggeredBy) }}</td>
+            <td style="width: 320px">
               <div class="push-log-page__message unified-list-page__message">
                 <strong>{{ record.message }}</strong>
                 <span v-if="record.errorMessage">错误：{{ record.errorMessage }}</span>
                 <span v-else-if="record.responseBody">响应：{{ record.responseBody }}</span>
               </div>
             </td>
-            <td>{{ record.retryCount }}</td>
-            <td>{{ formatDateTime(record.pushedAt) }}</td>
-            <td>
+            <td style="width: 90px">{{ record.retryCount }}</td>
+            <td style="width: 160px">{{ formatDateTime(record.pushedAt) }}</td>
+            <td style="width: 120px">
               <button
                 v-if="record.status !== 'success'"
                 v-permission="'push:log:retry'"
