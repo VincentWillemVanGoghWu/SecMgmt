@@ -1169,27 +1169,6 @@ const stopDownloadEstimateTimer = () => {
   downloadEstimateTimer = null
 }
 
-const updateTransferEstimate = (loaded: number, total?: number) => {
-  if (!downloadState.transferStartedAtMs) {
-    downloadState.transferStartedAtMs = Date.now()
-  }
-  const elapsedSeconds = Math.max(1, (Date.now() - downloadState.transferStartedAtMs) / 1000)
-  if (total && total > 0 && loaded > 0) {
-    const remainingBytes = Math.max(0, total - loaded)
-    const bytesPerSecond = loaded / elapsedSeconds
-    const remainingSeconds = bytesPerSecond > 0 ? remainingBytes / bytesPerSecond : 0
-    downloadState.estimatedRemainingText = remainingSeconds > 0
-      ? `预计剩余 ${formatDurationText(remainingSeconds)}`
-      : "即将完成"
-    return
-  }
-  const progress = Math.max(downloadState.progress, 1)
-  const remainingSeconds = elapsedSeconds * ((100 - progress) / progress)
-  downloadState.estimatedRemainingText = remainingSeconds > 0
-    ? `预计剩余 ${formatDurationText(remainingSeconds)}`
-    : "即将完成"
-}
-
 const clearSegments = () => {
   void stopPlaybackPlayerSilently()
   segments.value = []
