@@ -1069,6 +1069,25 @@ check_service_active() {
   exit 1
 }
 
+wait_for_http_ready() {
+  local label="$1"
+  shift
+  local attempt
+  local max_attempts=30
+  local retry_interval_seconds=2
+
+  for attempt in $(seq 1 "${max_attempts}"); do
+    if curl -fsS --connect-timeout 3 --max-time 5 "$@" >/dev/null; then
+      log_info "${label} is reachable."
+      return 0
+    fi
+    sleep "${retry_interval_seconds}"
+  done
+
+  log_error "${label} check failed after ${max_attempts} attempts."
+  return 1
+}
+
 run_health_checks() {
   local backend_health_url="http://127.0.0.1:${BACKEND_PORT}/healthz"
   local frontend_url="http://127.0.0.1:${FRONTEND_PORT}/"
@@ -1085,27 +1104,25 @@ run_health_checks() {
   check_service_active backend
   check_service_active frontend
 
-  if ! curl -fsS "${backend_health_url}" >/dev/null; then
+  if ! wait_for_http_ready "Backend health endpoint ${backend_health_url}" "${backend_health_url}"; then
     log_error "Backend health endpoint check failed: ${backend_health_url}"
     compose logs backend || true
     exit 1
   fi
-  log_info "Backend health endpoint is reachable."
 
   if [[ "${SERVER_NAME}" == "_" ]]; then
-    if ! curl -fsS "${frontend_url}" >/dev/null; then
+    if ! wait_for_http_ready "Frontend nginx ${frontend_url}" "${frontend_url}"; then
       log_error "Frontend nginx check failed."
       compose logs frontend || true
       exit 1
     fi
   else
-    if ! curl -fsS -H "Host: ${SERVER_NAME}" "${frontend_url}" >/dev/null; then
+    if ! wait_for_http_ready "Frontend nginx ${frontend_url} with Host ${SERVER_NAME}" -H "Host: ${SERVER_NAME}" "${frontend_url}"; then
       log_error "Frontend nginx check failed for Host: ${SERVER_NAME}"
       compose logs frontend || true
       exit 1
     fi
   fi
-  log_info "Frontend nginx is reachable."
 }
 
 print_summary() {
