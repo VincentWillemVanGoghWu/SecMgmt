@@ -15,6 +15,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/dist-ssr/
 frontend/.pytest_cache/
+.worktree/
 media/
 third_party/HCNetSDK_Linux64/Demo/
 third_party/HCNetSDK_Linux64/开发文档/
