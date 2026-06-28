@@ -97,6 +97,7 @@ const providerOptions = [
 const alarmTypeOptions = [
   { label: "未戴安全帽", value: "helmet_missing" },
   { label: "区域入侵", value: "intrusion" },
+  { label: "移动侦测", value: "移动侦测" },
   { label: "烟雾", value: "smoke" },
   { label: "明火", value: "fire" },
   { label: "人员跌倒", value: "person_fall" },
@@ -529,7 +530,7 @@ onMounted(async () => {
             <td>
               <div class="push-page__name-cell unified-list-page__name-cell">
                 <strong>{{ record.configName }}</strong>
-                <span>{{ record.secretConfigured ? "已配置 Secret 加签" : "未配置 Secret" }}</span>
+                <span>{{ getCredentialText(record) }}</span>
               </div>
             </td>
             <td><StatusTag :text="getProviderText(record.providerType)" :tone="getProviderTone(record.providerType)" /></td>

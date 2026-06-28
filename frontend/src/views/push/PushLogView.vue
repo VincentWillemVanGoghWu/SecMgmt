@@ -44,6 +44,7 @@ const alarmTypeOptions = [
   { label: "全部", value: "" },
   { label: "未戴安全帽", value: "helmet_missing" },
   { label: "区域入侵", value: "intrusion" },
+  { label: "移动侦测", value: "移动侦测" },
   { label: "烟雾", value: "smoke" },
   { label: "明火", value: "fire" },
   { label: "人员跌倒", value: "person_fall" },
