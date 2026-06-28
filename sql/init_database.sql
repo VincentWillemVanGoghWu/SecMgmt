@@ -811,34 +811,9 @@ INSERT INTO `sys_user` (`id`, `username`, `password_hash`, `real_name`, `dept_id
 DELETE FROM `sys_user_role` WHERE `user_id` = 1;
 INSERT INTO `sys_user_role` (`user_id`, `role_id`) VALUES (1, 1);
 DELETE FROM `sys_role_menu` WHERE `role_id` = 1;
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 1);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 2);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 3);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 4);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 5);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 6);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 7);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 8);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 9);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 10);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 11);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 12);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 13);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 14);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 15);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 16);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 17);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 18);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 19);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 20);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 21);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 22);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 23);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 24);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 25);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 26);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 27);
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES (1, 28);
+INSERT INTO `sys_role_menu` (`role_id`, `menu_id`)
+SELECT 1, `id`
+FROM `sys_menu`;
 DELETE FROM `sys_role_permission` WHERE `role_id` = 1;
 INSERT INTO `sys_role_permission` (`role_id`, `permission_id`) VALUES (1, 1);
 INSERT INTO `sys_role_permission` (`role_id`, `permission_id`) VALUES (1, 2);
