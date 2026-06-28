@@ -21,6 +21,12 @@ interface HikPlaybackRecord {
   recordType: string
 }
 
+interface HikPlaybackStartAttempt {
+  label: string
+  useProxy: boolean
+  webSocketPort?: number
+}
+
 interface HikWebVideoCtrl {
   I_SupportNoPlugin?: () => boolean
   I_InitPlugin: (width: string, height: string, options: Record<string, unknown>) => void
@@ -607,13 +613,10 @@ const isRetryablePlaybackStartError = (error: unknown) => {
   const message = getErrorMessage(error).toLowerCase()
   return [
     "设备请求失败",
-    "同步返回 -1",
     "1003",
     "1007",
     "1008",
     "1020",
-    "直连+自动协商端口",
-    "直连+显式ws端口",
     "启动 hik 回放",
   ].some((keyword) => message.includes(keyword.toLowerCase()))
 }
@@ -833,11 +836,48 @@ const withReloginRetry = async <T,>(
   return await action()
 }
 
+const resetPlaybackSession = async () => {
+  activeDeviceId = null
+  await teardownPlayer({ bumpStartToken: false })
+  await sleep(PLAYBACK_RETRY_DELAY_MS)
+}
+
 const clearPendingPluginError = () => {
   if (pendingPluginErrorTimer !== null) {
     window.clearTimeout(pendingPluginErrorTimer)
     pendingPluginErrorTimer = null
   }
+}
+
+const buildPlaybackStartAttempts = (
+  config: LiveWebControlConfig,
+  webSocketPort?: number,
+): HikPlaybackStartAttempt[] => {
+  const attempts: HikPlaybackStartAttempt[] = []
+  const pushAttempt = (attempt: HikPlaybackStartAttempt) => {
+    const exists = attempts.some((item) =>
+      item.useProxy === attempt.useProxy && item.webSocketPort === attempt.webSocketPort)
+    if (!exists) {
+      attempts.push(attempt)
+    }
+  }
+
+  pushAttempt({
+    label: config.useProxy ? "代理首选" : "直连首选",
+    useProxy: config.useProxy,
+    ...(webSocketPort ? { webSocketPort } : {}),
+  })
+  if (webSocketPort) {
+    pushAttempt({
+      label: config.useProxy ? "代理自动协商" : "直连自动协商",
+      useProxy: config.useProxy,
+    })
+  }
+  pushAttempt({
+    label: config.useProxy ? "直连兜底" : "代理兜底",
+    useProxy: !config.useProxy,
+  })
+  return attempts
 }
 
 const stopActivePlayback = () => {
@@ -848,9 +888,79 @@ const stopActivePlayback = () => {
   }
 }
 
-const stopPlayback = async (options?: { silent?: boolean }) => {
+const preparePlaybackStart = async () => {
+  await stopPlayback({ silent: true, preserveStartToken: true, clearNotice: true })
+  stopActivePlayback()
+  await nextTick()
+  await sleep(PLAYBACK_RETRY_DELAY_MS)
+}
+
+const startPlaybackWithAttempts = async (
+  sdkInstance: HikWebVideoCtrl,
+  deviceId: string,
+  config: LiveWebControlConfig,
+  params: {
+    startTime: string
+    endTime: string
+    streamType?: 1 | 2
+  },
+) => {
+  const ports = sdkInstance.I_GetDevicePort(deviceId)
+  const rtspPort = normalizePositivePort(config.rtspPort) ?? normalizePositivePort(ports?.iRtspPort)
+  const webSocketPort =
+    normalizePositivePort(config.webSocketPort)
+    ?? normalizePositivePort(config.protocol === "https" ? ports?.iWebSocketsPort : ports?.iWebSocketPort)
+
+  await preparePlaybackStart()
+
+  const attempts = buildPlaybackStartAttempts(config, webSocketPort)
+  let lastError: unknown = null
+  for (const attempt of attempts) {
+    try {
+      syncWebSocketProxyCookie(config, attempt.webSocketPort)
+      await wrapSdkCallback(
+        `启动 HIK 回放(${attempt.label})`,
+        PLAYBACK_TIMEOUT_MS,
+        (callbacks) =>
+          sdkInstance.I_StartPlayback(deviceId, {
+            iWndIndex: 0,
+            iRtspPort: rtspPort,
+            ...(attempt.webSocketPort ? { iWSPort: attempt.webSocketPort } : {}),
+            iStreamType: params.streamType ?? config.streamType,
+            iChannelID: config.channelNo,
+            szStartTime: params.startTime,
+            szEndTime: params.endTime,
+            bProxy: attempt.useProxy,
+            success: callbacks.success,
+            error: callbacks.error,
+          }),
+      )
+      return
+    } catch (error) {
+      lastError = error
+      stopActivePlayback()
+      if (attempt.webSocketPort) {
+        await sleep(PLAYBACK_RETRY_DELAY_MS)
+      }
+    }
+  }
+
+  throw lastError ?? new Error("启动 HIK 回放失败")
+}
+
+const stopPlayback = async (options?: {
+  silent?: boolean
+  preserveStartToken?: boolean
+  clearNotice?: boolean
+}) => {
+  const stopToken = options?.preserveStartToken ? startToken : ++startToken
   if (!sdkInitialized || !sdk) {
-    playerState.value = "idle"
+    if (stopToken === startToken) {
+      playerState.value = "idle"
+      if (options?.clearNotice) {
+        playerMessage.value = ""
+      }
+    }
     return
   }
   clearPendingPluginError()
@@ -871,7 +981,12 @@ const stopPlayback = async (options?: { silent?: boolean }) => {
       throw error
     }
   } finally {
-    playerState.value = "idle"
+    if (stopToken === startToken) {
+      playerState.value = "idle"
+      if (options?.clearNotice) {
+        playerMessage.value = ""
+      }
+    }
   }
 }
 
@@ -898,11 +1013,14 @@ const handleSdkPluginEvent = (errorCode: number) => {
     emit("playbackEnd", seekBarMax.value)
     return
   }
+  if (playerState.value === "idle") {
+    return
+  }
   const message = pluginErrorMessages[errorCode] ?? `HIK 播放器错误，代码 ${errorCode}。`
   if (errorCode === 1003) {
     pendingPluginErrorTimer = window.setTimeout(() => {
       pendingPluginErrorTimer = null
-      if (playerState.value === "ready") {
+      if (playerState.value === "ready" || playerState.value === "idle") {
         return
       }
       playerMessage.value = message
@@ -1003,72 +1121,14 @@ const startPlayback = async (params: {
   playerState.value = "loading"
   playerMessage.value = ""
 
-  const runStartPlayback = async () => {
+  const runStartPlayback = async (options?: { freshSession?: boolean }) => {
+    if (options?.freshSession) {
+      await resetPlaybackSession()
+    }
     await withReloginRetry(config, async () => {
       const { sdkInstance, deviceId } = await ensureLoggedIn(config)
       if (token !== startToken) return
-
-      const ports = sdkInstance.I_GetDevicePort(deviceId)
-      const rtspPort = normalizePositivePort(config.rtspPort) ?? normalizePositivePort(ports?.iRtspPort)
-      const webSocketPort =
-        normalizePositivePort(config.webSocketPort)
-        ?? normalizePositivePort(config.protocol === "https" ? ports?.iWebSocketsPort : ports?.iWebSocketPort)
-
-      await stopPlayback({ silent: true })
-      stopActivePlayback()
-      await nextTick()
-      await sleep(PLAYBACK_RETRY_DELAY_MS)
-
-      const createAttempt = (label: string, useProxy: boolean, explicitWebSocketPort?: number) => ({
-        label,
-        useProxy,
-        ...(explicitWebSocketPort ? { webSocketPort: explicitWebSocketPort } : {}),
-      })
-      const directAttempts = [
-        ...(webSocketPort ? [createAttempt("直连+显式WS端口", false, webSocketPort)] : []),
-        createAttempt("直连+自动协商端口", false),
-      ]
-      const proxyAttempts = [
-        ...(webSocketPort ? [createAttempt("代理+显式WS端口", true, webSocketPort)] : []),
-        createAttempt("代理+自动协商端口", true),
-      ]
-      const attempts = config.useProxy ? [...proxyAttempts, ...directAttempts] : [...directAttempts, ...proxyAttempts]
-
-      let lastError: unknown = null
-      for (const attempt of attempts) {
-        try {
-          syncWebSocketProxyCookie(config, attempt.webSocketPort)
-          await wrapSdkCallback(
-            `启动 HIK 回放(${attempt.label})`,
-            PLAYBACK_TIMEOUT_MS,
-            (callbacks) =>
-              sdkInstance.I_StartPlayback(deviceId, {
-                iWndIndex: 0,
-                iRtspPort: rtspPort,
-                ...(attempt.webSocketPort ? { iWSPort: attempt.webSocketPort } : {}),
-                iStreamType: params.streamType ?? config.streamType,
-                iChannelID: config.channelNo,
-                szStartTime: params.startTime,
-                szEndTime: params.endTime,
-                bProxy: attempt.useProxy,
-                success: callbacks.success,
-                error: callbacks.error,
-              }),
-          )
-          lastError = null
-          break
-        } catch (error) {
-          lastError = error
-          stopActivePlayback()
-          if (attempt.webSocketPort) {
-            await sleep(PLAYBACK_RETRY_DELAY_MS)
-          }
-        }
-      }
-
-      if (lastError) {
-        throw lastError
-      }
+      await startPlaybackWithAttempts(sdkInstance, deviceId, config, params)
     })
   }
 
@@ -1081,14 +1141,12 @@ const startPlayback = async (params: {
   } catch (error) {
     if (token !== startToken) return
     if (isRetryablePlaybackStartError(error)) {
-      await teardownPlayer({ bumpStartToken: false })
       if (token !== startToken) return
-      await sleep(PLAYBACK_RETRY_DELAY_MS)
       clearPendingPluginError()
       playerState.value = "loading"
       playerMessage.value = "HIK 回放重试中..."
       try {
-        await runStartPlayback()
+        await runStartPlayback({ freshSession: true })
         if (token !== startToken) return
         playerState.value = "ready"
         playerMessage.value = ""
@@ -1096,14 +1154,14 @@ const startPlayback = async (params: {
       } catch (retryError) {
         if (token !== startToken) return
         const retryMessage = getErrorMessage(retryError)
-        await teardownPlayer({ bumpStartToken: false })
+        await resetPlaybackSession()
         playerState.value = "idle"
         playerMessage.value = retryMessage
         throw retryError
       }
     }
     const message = getErrorMessage(error)
-    await teardownPlayer({ bumpStartToken: false })
+    await resetPlaybackSession()
     playerState.value = "idle"
     playerMessage.value = message
     throw error
@@ -1329,6 +1387,7 @@ const teardownPlayer = async (options?: { bumpStartToken?: boolean }) => {
   sdk = null
   sdkInitialized = false
   playerState.value = "idle"
+  playerMessage.value = ""
   clearProxyCookies()
 }
 

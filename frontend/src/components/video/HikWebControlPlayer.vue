@@ -168,7 +168,7 @@ const resolvePlayerErrorMessage = (error: unknown) => {
   const text = error instanceof Error ? error.message : String(error ?? "")
   const normalized = text.toLowerCase()
   if (normalized.includes("failed to fetch") || normalized.includes("404")) {
-    return `未找到海康 WebSDK 静态资源，请将官方 WebSDK_noPlugin 的 codebase 目录部署到 ${sdkScriptUrl.replace(/\/webVideoCtrl\.js$/, "")}。`
+    return `未找到海康 WebSDK 静态资源，请将官方 WebSDK 的 codebase 目录部署到 ${sdkScriptUrl.replace(/\/webVideoCtrl\.js$/, "")}。`
   }
   if (normalized.includes("loadwebvideoctrl")) {
     return `海康 WebSDK 加载失败，请确认 ${sdkScriptUrl} 可以被浏览器访问。`

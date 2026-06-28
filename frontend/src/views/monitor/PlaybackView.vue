@@ -17,27 +17,18 @@ import {
 import PageCard from "../../components/common/PageCard.vue"
 import SearchForm from "../../components/common/SearchForm.vue"
 import HikWebControlPlaybackPlayer from "../../components/video/HikWebControlPlaybackPlayer.vue"
-import VideoPlayer from "../../components/video/VideoPlayer.vue"
 import { listFactoriesApi, listZonesApi } from "../../api/master-data"
 import { listChannelsApi } from "../../api/recorder"
 import {
-  downloadPlaybackFileApi,
   getChannelLiveWebControlConfigApi,
-  getPlaybackUrlApi,
-  searchPlaybackSegmentsApi,
-  seekPlaybackApi,
-  stopPlaybackApi,
 } from "../../api/video"
 import { playbackDownloadState } from "../../services/playbackDownloadStore"
 import type { FactoryRecord, ZoneRecord } from "../../types/master-data"
 import type { RecorderChannelRecord } from "../../types/recorder"
 import type {
   LiveWebControlConfig,
-  PlaybackMode,
   PlaybackSegmentRecord,
   PlaybackTimelineSpan,
-  StreamProfile,
-  StreamType,
 } from "../../types/video"
 
 const route = useRoute()
@@ -46,17 +37,12 @@ const loading = ref(false)
 const searching = ref(false)
 const playbackLoading = ref(false)
 const snapshotLoading = ref(false)
-const playerErrorSuppressed = ref(false)
 const hikDisplayOffsetSeconds = ref(0)
 const playerRef = ref<HTMLElement | null>(null)
-const videoPlayerRef = ref<{
-  captureCurrentFrame: () => string | null
-  getPlaybackCurrentDateTime: () => string
-} | null>(null)
 const hikPlaybackPlayerRef = ref<{
   searchRecords: (params: { startTime: string; endTime: string; streamType?: 1 | 2 }) => Promise<HikSdkPlaybackRecord[]>
   startPlayback: (params: { startTime: string; endTime: string; streamType?: 1 | 2 }) => Promise<void>
-  stopPlayback: (options?: { silent?: boolean }) => Promise<void>
+  stopPlayback: (options?: { silent?: boolean; preserveStartToken?: boolean; clearNotice?: boolean }) => Promise<void>
   setPlaybackLoading: (message?: string) => void
   clearPlaybackLoading: () => void
   pausePlayback: () => Promise<void>
@@ -154,19 +140,13 @@ const queryForm = reactive({
 })
 
 const playback = reactive({
-  streamType: "hik-sdk" as StreamType,
-  streamProfile: "main" as StreamProfile,
-  playUrl: null as string | null,
   isPlaying: false,
   isPaused: false,
   speed: 1,
-  playbackMode: "hik" as PlaybackMode,
   seekOffsetSeconds: 0,
-  seekTargetSeconds: null as number | null,
   message: "请选择录像片段后开始回放",
   snapshotUrl: null as string | null,
 })
-const activePlaybackMode = ref<PlaybackMode | null>(null)
 const PLAYBACK_SPEED_STEPS = [0.5, 1, 2, 4, 8] as const
 const downloadState = playbackDownloadState
 const recordedDayKeys = ref<Set<string>>(new Set())
@@ -280,12 +260,6 @@ const handleBlockedRangePickerClick = () => {
   }
   void showPlaybackNotice("请先选择摄像机通道后再选择日期时间。", "warning")
 }
-
-const activeCameraName = computed(() => selectedSegment.value?.cameraName || "未选择录像")
-const activeLocation = computed(() => {
-  if (!selectedSegment.value) return ""
-  return `${selectedSegment.value.recorderName} / ${selectedSegment.value.channelName}`
-})
 
 const currentDownloadSegment = computed(() =>
   segments.value.find((item) => getSegmentKey(item) === downloadState.segmentKey) ?? null,
@@ -407,7 +381,7 @@ const updateRecordedDayKeysForPanel = (panelDates: Date[]) => {
 }
 
 const loadRecordedDaysForPanel = async (panelDates?: Date[]) => {
-  if (playback.playbackMode !== "hik" || !queryForm.channelId) {
+  if (!queryForm.channelId) {
     resetRecordedDayHighlights()
     return
   }
@@ -526,17 +500,7 @@ watch(
     }
     hikPlaybackConfig.value = null
     resetRecordedDayHighlights()
-    if (playback.playbackMode === "hik" && channelId && rangePickerVisible.value) {
-      void loadRecordedDaysForPanel(getInitialRangePickerPanelDates())
-    }
-  },
-)
-
-watch(
-  () => playback.playbackMode,
-  (mode) => {
-    resetRecordedDayHighlights()
-    if (mode === "hik" && queryForm.channelId && rangePickerVisible.value) {
+    if (channelId && rangePickerVisible.value) {
       void loadRecordedDaysForPanel(getInitialRangePickerPanelDates())
     }
   },
@@ -828,7 +792,6 @@ const formatSegmentRange = (segment: PlaybackDaySegment) => {
 }
 
 let downloadEstimateTimer: number | null = null
-let playerErrorSuppressTimer: number | null = null
 let playbackRequestId = 0
 let pendingSeekOffset: number | null = null
 let flushingPendingSeek = false
@@ -838,17 +801,13 @@ let hikClockAnchorOffsetSeconds = 0
 let hikClockAnchorStartedAtMs = 0
 let hikClockOsdSyncToken = 0
 let hikSpeedReplayToken = 0
-const playbackSeekPrerollSeconds = 12
 
-const suppressPlayerErrorsBriefly = (durationMs = 15000) => {
-  playerErrorSuppressed.value = true
-  if (playerErrorSuppressTimer !== null) {
-    window.clearTimeout(playerErrorSuppressTimer)
+const stopPlaybackPlayerSilently = async () => {
+  try {
+    await hikPlaybackPlayerRef.value?.stopPlayback({ silent: true, clearNotice: true })
+  } catch {
+    // Ignore sync-stop errors when UI is resetting selection or query.
   }
-  playerErrorSuppressTimer = window.setTimeout(() => {
-    playerErrorSuppressed.value = false
-    playerErrorSuppressTimer = null
-  }, durationMs)
 }
 
 const clearPendingSeek = () => {
@@ -946,7 +905,6 @@ const syncHikClockFromOsd = async (options: {
     || !hikPlaybackPlayerRef.value?.getOSDTime
     || !playback.isPlaying
     || playback.isPaused
-    || activePlaybackMode.value !== "hik"
   ) {
     return null
   }
@@ -1000,7 +958,6 @@ const scheduleHikClockOsdSync = (delayMs = 900) => {
         || !selectedSegment.value
         || !playback.isPlaying
         || playback.isPaused
-        || activePlaybackMode.value !== "hik"
         || !shouldUseHikOsdSync(playback.speed)
       ) {
         return
@@ -1016,7 +973,7 @@ const restartHikClock = () => {
     hikClockTimer = null
   }
   syncHikClock()
-  if (!playback.isPlaying || playback.isPaused || activePlaybackMode.value !== "hik") {
+  if (!playback.isPlaying || playback.isPaused) {
     return
   }
   hikClockTimer = window.setInterval(syncHikClock, 500)
@@ -1056,8 +1013,7 @@ const replayHikSpeed = async (targetSpeed: number) => {
   return true
 }
 
-const getPlaybackSpeedMessage = (speed: number, mode: PlaybackMode) =>
-  `${mode === "hik" ? "HIK 回放速度" : "当前回放速度"} ${speed.toFixed(1)}x`
+const getPlaybackSpeedMessage = (speed: number) => `HIK 回放速度 ${speed.toFixed(1)}x`
 
 const cancelHikSpeedReplay = () => {
   hikSpeedReplayToken += 1
@@ -1235,17 +1191,15 @@ const updateTransferEstimate = (loaded: number, total?: number) => {
 }
 
 const clearSegments = () => {
+  void stopPlaybackPlayerSilently()
   segments.value = []
   selectedSegment.value = null
   hikPlaybackConfig.value = null
-  playback.playUrl = null
   playback.isPlaying = false
   playback.isPaused = false
   playback.seekOffsetSeconds = 0
-  playback.seekTargetSeconds = null
   playback.snapshotUrl = null
   playback.message = "请选择录像片段后开始回放"
-  activePlaybackMode.value = null
   hikDisplayOffsetSeconds.value = 0
   stopHikClock()
   playbackLoading.value = false
@@ -1304,25 +1258,14 @@ const searchSegments = async (validateChannel = true, autoPlayFirst = false) => 
   const [startTime, endTime] = queryForm.range
   searching.value = true
   try {
-    if (playback.playbackMode === "hik") {
-      const source = selectedSource.value
-      const config = await ensureHikPlaybackConfig()
-      const records = await hikPlaybackPlayerRef.value?.searchRecords({
-        startTime: toSdkSearchDateTime(startTime),
-        endTime: toSdkSearchDateTime(endTime),
-        streamType: config.streamType,
-      })
-      segments.value = source && records ? buildHikSegments(records, source, startTime, endTime) : []
-    } else {
-      const rawSegments = await searchPlaybackSegmentsApi({
-        recorder_id: queryForm.recorderId ? Number(queryForm.recorderId) : undefined,
-        channel_id: queryForm.channelId ? Number(queryForm.channelId) : undefined,
-        start_time: startTime,
-        end_time: endTime,
-        record_type: queryForm.recordType,
-      })
-      segments.value = aggregateSegmentsToDaily(rawSegments, startTime, endTime)
-    }
+    const source = selectedSource.value
+    const config = await ensureHikPlaybackConfig()
+    const records = await hikPlaybackPlayerRef.value?.searchRecords({
+      startTime: toSdkSearchDateTime(startTime),
+      endTime: toSdkSearchDateTime(endTime),
+      streamType: config.streamType,
+    })
+    segments.value = source && records ? buildHikSegments(records, source, startTime, endTime) : []
     if (segments.value[0]) {
       if (autoPlayFirst) {
         await handleSelectAndPlay(segments.value[0])
@@ -1333,12 +1276,7 @@ const searchSegments = async (validateChannel = true, autoPlayFirst = false) => 
       clearSegments()
     }
     if (!segments.value.length) {
-      void showPlaybackNotice(
-        playback.playbackMode === "hik"
-          ? "未找到录像片段，请扩大时间范围或检查设备侧录像。"
-          : "未找到录像片段，请扩大时间范围，并检查后端 runtime/playback-search 搜索日志。",
-        "warning",
-      )
+      void showPlaybackNotice("未找到录像片段，请扩大时间范围或检查设备侧录像。", "warning")
     }
   } catch (error) {
     void showPlaybackNotice(resolveErrorMessage(error, "查询录像片段失败"), "error")
@@ -1366,18 +1304,16 @@ const handleTreeSourceDoubleClick = async (source: PlaybackTreeSourceItem) => {
 }
 
 const selectSegment = (segment: PlaybackDaySegment) => {
+  void stopPlaybackPlayerSilently()
   cancelHikSpeedReplay()
   const firstPlayableOffsetSeconds = resolveFirstPlayableOffsetSeconds(segment)
   selectedSegment.value = segment
-  playback.playUrl = null
   playback.isPlaying = false
   playback.isPaused = false
   resetPlaybackSpeed()
   playback.seekOffsetSeconds = firstPlayableOffsetSeconds
-  playback.seekTargetSeconds = null
   playback.snapshotUrl = null
-  playback.message = playback.playbackMode === "hik" ? "已选择录像片段，点击播放启动 HIK 回放" : "已选择录像片段，点击播放获取回放地址"
-  activePlaybackMode.value = null
+  playback.message = "已选择录像片段，点击播放启动 WebSDK 回放"
   hikDisplayOffsetSeconds.value = firstPlayableOffsetSeconds
   stopHikClock()
   playbackLoading.value = false
@@ -1394,7 +1330,7 @@ const isActiveSegment = (segment: PlaybackDaySegment) =>
   selectedSegment.value?.axisStartTime === segment.axisStartTime && selectedSegment.value?.channelId === segment.channelId
 
 const isSegmentPlaying = (segment: PlaybackDaySegment) =>
-  isActiveSegment(segment) && (playbackLoading.value || playback.isPlaying || playback.isPaused || Boolean(playback.playUrl))
+  isActiveSegment(segment) && (playbackLoading.value || playback.isPlaying || playback.isPaused)
 
 const handleSegmentPrimaryAction = async (segment: PlaybackDaySegment) => {
   if (isSegmentPlaying(segment)) {
@@ -1415,15 +1351,11 @@ const resolvePlaybackSnapshotOsdTime = async () => {
   if (!selectedSegment.value) {
     return ""
   }
-  if (activePlaybackMode.value === "hik") {
-    try {
-      return await hikPlaybackPlayerRef.value?.getOSDTime() || ""
-    } catch {
-      return addSecondsToDateTime(selectedSegment.value.axisStartTime, Math.floor(hikDisplayOffsetSeconds.value))
-    }
+  try {
+    return await hikPlaybackPlayerRef.value?.getOSDTime() || ""
+  } catch {
+    return addSecondsToDateTime(selectedSegment.value.axisStartTime, Math.floor(hikDisplayOffsetSeconds.value))
   }
-  return videoPlayerRef.value?.getPlaybackCurrentDateTime()
-    || addSecondsToDateTime(selectedSegment.value.axisStartTime, Math.floor(playback.seekOffsetSeconds))
 }
 
 const buildPlaybackSnapshotFileName = async (dataUrl: string) => {
@@ -1446,7 +1378,7 @@ const resolvePlaybackOffsetSeconds = (segment: PlaybackDaySegment, offsetSeconds
 
 const handlePlay = async (
   offsetSeconds = 0,
-  options: { usePreroll?: boolean; resetHikSpeedOnSeek?: boolean } = {},
+  options: { resetHikSpeedOnSeek?: boolean } = {},
 ) => {
   if (!selectedSegment.value) {
     playback.message = "请先选择录像片段"
@@ -1456,114 +1388,60 @@ const handlePlay = async (
   const requestId = ++playbackRequestId
   playbackLoading.value = true
   try {
-    if (playback.playbackMode === "hik") {
-      cancelHikSpeedReplay()
-      const config = await ensureHikPlaybackConfig()
-      const requestedPlaybackSpeed = playback.speed
-      const shouldResetHikSpeedOnSeek = Boolean(options.resetHikSpeedOnSeek) && requestedPlaybackSpeed !== 1
-      const targetOffsetSeconds = resolvePlaybackOffsetSeconds(selectedSegment.value, offsetSeconds)
-      const targetPoint = buildPlayablePoint(selectedSegment.value, targetOffsetSeconds)
-      if (!targetPoint) {
-        throw new Error("当前日期没有可播放的录像片段。")
-      }
-      await hikPlaybackPlayerRef.value?.startPlayback({
-        startTime: toSdkSearchDateTime(targetPoint.targetTime),
-        endTime: toSdkSearchDateTime(targetPoint.span.endTime),
-        streamType: config.streamType,
-      })
-      if (requestId !== playbackRequestId) {
-        return
-      }
-      playback.playUrl = null
-      playback.isPlaying = true
-      playback.isPaused = false
-      activePlaybackMode.value = "hik"
-      playback.seekOffsetSeconds = targetPoint.targetOffsetSeconds
-      playback.seekTargetSeconds = null
-      if (shouldResetHikSpeedOnSeek) {
-        resetPlaybackSpeed()
-      }
-      setHikClockAnchor(targetPoint.targetOffsetSeconds)
-      if (playback.speed !== 1) {
-        hikPlaybackPlayerRef.value?.setPlaybackLoading("HIK 鍊嶉€熸仮澶嶄腑...")
-        try {
-          await replayHikSpeed(playback.speed)
-        } catch {
-          playback.message = "HIK 倍速恢复失败，请重试调整倍速"
-        } finally {
-          hikPlaybackPlayerRef.value?.clearPlaybackLoading()
-        }
-      }
-      let syncedOffsetSeconds: number | null = null
-      if (shouldUseHikOsdSync(playback.speed)) {
-        syncedOffsetSeconds = await syncHikClockFromOsd({
-          delayMs: getHikClockSyncDelayMs(playback.speed),
-          retries: playback.speed >= 4 ? 1 : 0,
-          allowBackwardJump: true,
-        })
-        if (syncedOffsetSeconds === null) {
-          setHikClockAnchor(targetPoint.targetOffsetSeconds)
-        }
-      }
-      restartHikClock()
-      if (shouldUseHikOsdSync(playback.speed)) {
-        scheduleHikClockOsdSync(getHikClockSyncDelayMs(playback.speed) + 600)
-      }
-      const playbackMessage = targetPoint.targetOffsetSeconds !== targetOffsetSeconds
-        ? "该时段无录像，已跳转到最近录像位置"
-        : normalizePlaybackMessage("", getPlaybackSpeedMessage(playback.speed, "hik"))
-      playback.message = shouldResetHikSpeedOnSeek
-        ? `${playbackMessage}，已为稳定性重置为 1.0x`
-        : playbackMessage
-      return
-    }
-
-    playback.streamType = "hik-sdk"
+    cancelHikSpeedReplay()
+    const config = await ensureHikPlaybackConfig()
+    const requestedPlaybackSpeed = playback.speed
+    const shouldResetHikSpeedOnSeek = Boolean(options.resetHikSpeedOnSeek) && requestedPlaybackSpeed !== 1
     const targetOffsetSeconds = resolvePlaybackOffsetSeconds(selectedSegment.value, offsetSeconds)
     const targetPoint = buildPlayablePoint(selectedSegment.value, targetOffsetSeconds)
     if (!targetPoint) {
       throw new Error("当前日期没有可播放的录像片段。")
     }
-    const isNativeMode = playback.playbackMode === "native"
-    if (isNativeMode) {
-      suppressPlayerErrorsBriefly()
-    }
-    const prerollSeconds = isNativeMode || options.usePreroll === false
-      ? 0
-      : Math.min(playbackSeekPrerollSeconds, targetPoint.targetOffsetSeconds)
-    const streamOffsetSeconds = isNativeMode ? targetPoint.spanStartOffsetSeconds : Math.max(0, targetPoint.targetOffsetSeconds - prerollSeconds)
-    const playbackStartTime = addSecondsToDateTime(selectedSegment.value.axisStartTime, streamOffsetSeconds)
-    const data = await getPlaybackUrlApi({
-      recorder_id: selectedSegment.value.recorderId,
-      channel_id: selectedSegment.value.channelId,
-      camera_id: selectedSegment.value.cameraId ?? undefined,
-      start_time: playbackStartTime,
-      end_time: selectedSegment.value.axisEndTime,
-      stream_type: "hik-sdk",
-      stream_profile: "main",
-      prebuffer_seconds: prerollSeconds,
-      playback_mode: playback.playbackMode,
+    await hikPlaybackPlayerRef.value?.startPlayback({
+      startTime: toSdkSearchDateTime(targetPoint.targetTime),
+      endTime: toSdkSearchDateTime(targetPoint.span.endTime),
+      streamType: config.streamType,
     })
     if (requestId !== playbackRequestId) {
       return
     }
-    playback.playUrl = `${data.playUrl}${data.playUrl.includes("?") ? "&" : "?"}_ts=${Date.now()}`
-    playback.streamType = "hik-sdk"
-    playback.streamProfile = "main"
     playback.isPlaying = true
     playback.isPaused = false
-    activePlaybackMode.value = playback.playbackMode
-    playback.seekOffsetSeconds = streamOffsetSeconds
-    playback.seekTargetSeconds = targetPoint.targetOffsetSeconds
-    if (isNativeMode) {
-      suppressPlayerErrorsBriefly()
+    playback.seekOffsetSeconds = targetPoint.targetOffsetSeconds
+    if (shouldResetHikSpeedOnSeek) {
+      resetPlaybackSpeed()
     }
-    playback.message = normalizePlaybackMessage(
-      data.diagnosticMessage,
-      targetPoint.targetOffsetSeconds !== targetOffsetSeconds
-        ? "该时段无录像，已跳转到最近录像位置"
-        : getPlaybackSpeedMessage(playback.speed, playback.playbackMode),
-    )
+    setHikClockAnchor(targetPoint.targetOffsetSeconds)
+    if (playback.speed !== 1) {
+      hikPlaybackPlayerRef.value?.setPlaybackLoading("HIK 倍速恢复中...")
+      try {
+        await replayHikSpeed(playback.speed)
+      } catch {
+        playback.message = "HIK 倍速恢复失败，请重试调整倍速"
+      } finally {
+        hikPlaybackPlayerRef.value?.clearPlaybackLoading()
+      }
+    }
+    if (shouldUseHikOsdSync(playback.speed)) {
+      const syncedOffsetSeconds = await syncHikClockFromOsd({
+        delayMs: getHikClockSyncDelayMs(playback.speed),
+        retries: playback.speed >= 4 ? 1 : 0,
+        allowBackwardJump: true,
+      })
+      if (syncedOffsetSeconds === null) {
+        setHikClockAnchor(targetPoint.targetOffsetSeconds)
+      }
+    }
+    restartHikClock()
+    if (shouldUseHikOsdSync(playback.speed)) {
+      scheduleHikClockOsdSync(getHikClockSyncDelayMs(playback.speed) + 600)
+    }
+    const playbackMessage = targetPoint.targetOffsetSeconds !== targetOffsetSeconds
+      ? "该时段无录像，已跳转到最近录像位置"
+      : normalizePlaybackMessage("", getPlaybackSpeedMessage(playback.speed))
+    playback.message = shouldResetHikSpeedOnSeek
+      ? `${playbackMessage}，已为稳定性重置为 1.0x`
+      : playbackMessage
   } catch (error) {
     if (requestId === playbackRequestId) {
       playback.message = resolveErrorMessage(error, "开始回放失败")
@@ -1581,33 +1459,28 @@ const handlePauseToggle = () => {
     playback.message = "当前没有正在回放的录像"
     return
   }
-  if (activePlaybackMode.value === "hik") {
-    playbackLoading.value = true
-    const action = playback.isPaused ? hikPlaybackPlayerRef.value?.resumePlayback() : hikPlaybackPlayerRef.value?.pausePlayback()
-    Promise.resolve(action)
-      .then(() => {
-        syncHikClock()
-        playback.isPaused = !playback.isPaused
-        if (playback.isPaused) {
-          hikClockAnchorOffsetSeconds = hikDisplayOffsetSeconds.value
-          stopHikClock()
-        } else {
-          setHikClockAnchor(hikDisplayOffsetSeconds.value)
-          restartHikClock()
-          scheduleHikClockOsdSync()
-        }
-        playback.message = playback.isPaused ? "HIK 回放已暂停" : "HIK 回放继续播放"
-      })
-      .catch((error) => {
-        playback.message = resolveErrorMessage(error, playback.isPaused ? "HIK 回放继续失败" : "HIK 回放暂停失败")
-      })
-      .finally(() => {
-        playbackLoading.value = false
-      })
-    return
-  }
-  playback.isPaused = !playback.isPaused
-  playback.message = playback.isPaused ? "回放已暂停" : "回放继续播放"
+  playbackLoading.value = true
+  const action = playback.isPaused ? hikPlaybackPlayerRef.value?.resumePlayback() : hikPlaybackPlayerRef.value?.pausePlayback()
+  Promise.resolve(action)
+    .then(() => {
+      syncHikClock()
+      playback.isPaused = !playback.isPaused
+      if (playback.isPaused) {
+        hikClockAnchorOffsetSeconds = hikDisplayOffsetSeconds.value
+        stopHikClock()
+      } else {
+        setHikClockAnchor(hikDisplayOffsetSeconds.value)
+        restartHikClock()
+        scheduleHikClockOsdSync()
+      }
+      playback.message = playback.isPaused ? "HIK 回放已暂停" : "HIK 回放继续播放"
+    })
+    .catch((error) => {
+      playback.message = resolveErrorMessage(error, playback.isPaused ? "HIK 回放继续失败" : "HIK 回放暂停失败")
+    })
+    .finally(() => {
+      playbackLoading.value = false
+    })
 }
 
 const handleStop = async () => {
@@ -1615,34 +1488,20 @@ const handleStop = async () => {
     playback.message = "请先选择录像片段"
     return
   }
-  const channelId = selectedSegment.value.channelId
   playbackRequestId += 1
   playbackLoading.value = false
   cancelHikSpeedReplay()
   playback.isPlaying = false
   playback.isPaused = false
-  playback.playUrl = null
   resetPlaybackSpeed()
   playback.seekOffsetSeconds = 0
-  playback.seekTargetSeconds = null
   hikDisplayOffsetSeconds.value = 0
   stopHikClock()
   playback.message = "回放已停止"
   clearPendingSeek()
   await nextTick()
-  try {
-    if (activePlaybackMode.value === "hik") {
-      await hikPlaybackPlayerRef.value?.stopPlayback({ silent: true })
-      playback.message = "HIK 回放已停止"
-      activePlaybackMode.value = null
-      return
-    }
-    const result = await stopPlaybackApi(channelId)
-    playback.message = normalizePlaybackMessage(result.message, "回放已停止")
-    activePlaybackMode.value = null
-  } catch (error) {
-    playback.message = resolveErrorMessage(error, "停止回放失败")
-  }
+  await stopPlaybackPlayerSilently()
+  playback.message = "HIK 回放已停止"
 }
 
 const handleSpeedUp = () => {
@@ -1652,43 +1511,38 @@ const handleSpeedUp = () => {
   }
   const targetSpeed = getNextPlaybackSpeed(playback.speed)
   if (targetSpeed === playback.speed) {
-    playback.message = getPlaybackSpeedMessage(playback.speed, playback.playbackMode)
+    playback.message = getPlaybackSpeedMessage(playback.speed)
     return
   }
-  if (activePlaybackMode.value === "hik") {
-    cancelHikSpeedReplay()
-    cancelScheduledHikClockOsdSync()
-    playbackLoading.value = true
-    syncHikClock()
-    Promise.resolve(hikPlaybackPlayerRef.value?.playFast())
-      .then(async () => {
-        playback.speed = targetSpeed
-        let syncedOffsetSeconds: number | null = null
-        if (shouldUseHikOsdSync(targetSpeed)) {
-          syncedOffsetSeconds = await syncHikClockFromOsd({
-            delayMs: getHikClockSyncDelayMs(targetSpeed),
-            retries: targetSpeed >= 4 ? 1 : 0,
-          })
-        }
-        if (syncedOffsetSeconds === null) {
-          setHikClockAnchor(hikDisplayOffsetSeconds.value)
-        }
-        restartHikClock()
-        if (shouldUseHikOsdSync(targetSpeed)) {
-          scheduleHikClockOsdSync(getHikClockSyncDelayMs(targetSpeed) + 600)
-        }
-        playback.message = getPlaybackSpeedMessage(playback.speed, "hik")
-      })
-      .catch((error) => {
-        playback.message = resolveErrorMessage(error, "HIK 快进失败")
-      })
-      .finally(() => {
-        playbackLoading.value = false
-      })
-    return
-  }
-  playback.speed = targetSpeed
-  playback.message = getPlaybackSpeedMessage(playback.speed, playback.playbackMode)
+  cancelHikSpeedReplay()
+  cancelScheduledHikClockOsdSync()
+  playbackLoading.value = true
+  syncHikClock()
+  Promise.resolve(hikPlaybackPlayerRef.value?.playFast())
+    .then(async () => {
+      playback.speed = targetSpeed
+      let syncedOffsetSeconds: number | null = null
+      if (shouldUseHikOsdSync(targetSpeed)) {
+        syncedOffsetSeconds = await syncHikClockFromOsd({
+          delayMs: getHikClockSyncDelayMs(targetSpeed),
+          retries: targetSpeed >= 4 ? 1 : 0,
+        })
+      }
+      if (syncedOffsetSeconds === null) {
+        setHikClockAnchor(hikDisplayOffsetSeconds.value)
+      }
+      restartHikClock()
+      if (shouldUseHikOsdSync(targetSpeed)) {
+        scheduleHikClockOsdSync(getHikClockSyncDelayMs(targetSpeed) + 600)
+      }
+      playback.message = getPlaybackSpeedMessage(playback.speed)
+    })
+    .catch((error) => {
+      playback.message = resolveErrorMessage(error, "HIK 快进失败")
+    })
+    .finally(() => {
+      playbackLoading.value = false
+    })
 }
 
 const handleSlowDown = () => {
@@ -1698,42 +1552,37 @@ const handleSlowDown = () => {
   }
   const targetSpeed = getPreviousPlaybackSpeed(playback.speed)
   if (targetSpeed === playback.speed) {
-    playback.message = getPlaybackSpeedMessage(playback.speed, playback.playbackMode)
+    playback.message = getPlaybackSpeedMessage(playback.speed)
     return
   }
-  if (activePlaybackMode.value === "hik") {
-    cancelHikSpeedReplay()
-    cancelScheduledHikClockOsdSync()
-    playbackLoading.value = true
-    syncHikClock()
-    Promise.resolve(hikPlaybackPlayerRef.value?.playSlow())
-      .then(async () => {
-        playback.speed = targetSpeed
-        let syncedOffsetSeconds: number | null = null
-        if (shouldUseHikOsdSync(targetSpeed)) {
-          syncedOffsetSeconds = await syncHikClockFromOsd({
-            delayMs: getHikClockSyncDelayMs(targetSpeed),
-          })
-        }
-        if (syncedOffsetSeconds === null) {
-          setHikClockAnchor(hikDisplayOffsetSeconds.value)
-        }
-        restartHikClock()
-        if (shouldUseHikOsdSync(targetSpeed)) {
-          scheduleHikClockOsdSync(getHikClockSyncDelayMs(targetSpeed) + 600)
-        }
-        playback.message = getPlaybackSpeedMessage(playback.speed, "hik")
-      })
-      .catch((error) => {
-        playback.message = resolveErrorMessage(error, "HIK 慢放失败")
-      })
-      .finally(() => {
-        playbackLoading.value = false
-      })
-    return
-  }
-  playback.speed = targetSpeed
-  playback.message = getPlaybackSpeedMessage(playback.speed, playback.playbackMode)
+  cancelHikSpeedReplay()
+  cancelScheduledHikClockOsdSync()
+  playbackLoading.value = true
+  syncHikClock()
+  Promise.resolve(hikPlaybackPlayerRef.value?.playSlow())
+    .then(async () => {
+      playback.speed = targetSpeed
+      let syncedOffsetSeconds: number | null = null
+      if (shouldUseHikOsdSync(targetSpeed)) {
+        syncedOffsetSeconds = await syncHikClockFromOsd({
+          delayMs: getHikClockSyncDelayMs(targetSpeed),
+        })
+      }
+      if (syncedOffsetSeconds === null) {
+        setHikClockAnchor(hikDisplayOffsetSeconds.value)
+      }
+      restartHikClock()
+      if (shouldUseHikOsdSync(targetSpeed)) {
+        scheduleHikClockOsdSync(getHikClockSyncDelayMs(targetSpeed) + 600)
+      }
+      playback.message = getPlaybackSpeedMessage(playback.speed)
+    })
+    .catch((error) => {
+      playback.message = resolveErrorMessage(error, "HIK 慢放失败")
+    })
+    .finally(() => {
+      playbackLoading.value = false
+    })
 }
 
 const handleSnapshot = async () => {
@@ -1743,10 +1592,7 @@ const handleSnapshot = async () => {
   }
   snapshotLoading.value = true
   try {
-    const dataUrl =
-      activePlaybackMode.value === "hik"
-        ? (await hikPlaybackPlayerRef.value?.captureCurrentFrame()) ?? null
-        : videoPlayerRef.value?.captureCurrentFrame() ?? null
+    const dataUrl = (await hikPlaybackPlayerRef.value?.captureCurrentFrame()) ?? null
     if (!dataUrl) {
       void showPlaybackNotice("当前画面尚未准备完成，暂时无法截图。", "warning")
       return
@@ -1782,123 +1628,32 @@ const handleFullscreen = async (nextFullscreen?: boolean) => {
   }
 }
 
-const handleNativeSeekPlayback = async (offsetSeconds: number) => {
-  if (!selectedSegment.value) {
-    return
-  }
-  if (!playback.isPlaying) {
-    await handlePlay(0, { usePreroll: false })
-    if (!playback.isPlaying) {
-      return
-    }
-  }
-
-  const requestId = ++playbackRequestId
-  const previousPlayUrl = playback.playUrl
-  const previousSeekOffsetSeconds = playback.seekOffsetSeconds
-  const previousSeekTargetSeconds = playback.seekTargetSeconds
-  suppressPlayerErrorsBriefly()
-  playbackLoading.value = true
-  playback.isPaused = true
-  try {
-    const targetOffsetSeconds = resolvePlaybackOffsetSeconds(selectedSegment.value, offsetSeconds)
-    const targetPoint = buildPlayablePoint(selectedSegment.value, targetOffsetSeconds)
-    if (!targetPoint) {
-      throw new Error("当前日期没有可播放的录像片段。")
-    }
-    const data = await seekPlaybackApi({
-      channel_id: selectedSegment.value.channelId,
-      target_time: targetPoint.targetTime,
-      prebuffer_seconds: 2,
-    })
-    if (requestId !== playbackRequestId) {
-      return
-    }
-    playback.playUrl = `${data.playUrl}${data.playUrl.includes("?") ? "&" : "?"}_ts=${Date.now()}`
-    playback.streamType = "hik-sdk"
-    playback.streamProfile = "main"
-    playback.isPlaying = true
-    playback.isPaused = false
-    playback.seekOffsetSeconds = targetPoint.targetOffsetSeconds
-    playback.seekTargetSeconds = null
-    suppressPlayerErrorsBriefly()
-    playback.message = normalizePlaybackMessage(
-      data.diagnosticMessage,
-      targetPoint.targetOffsetSeconds !== targetOffsetSeconds
-        ? "该时段无录像，已跳转到最近录像位置"
-        : getPlaybackSpeedMessage(playback.speed, playback.playbackMode),
-    )
-  } catch (error) {
-    if (requestId === playbackRequestId) {
-      if (previousPlayUrl) {
-        playback.playUrl = previousPlayUrl
-        playback.isPlaying = true
-        playback.isPaused = false
-        playback.seekOffsetSeconds = previousSeekOffsetSeconds
-        playback.seekTargetSeconds = previousSeekTargetSeconds
-      } else {
-        playback.isPlaying = false
-        playback.isPaused = false
-        playback.playUrl = null
-      }
-      playback.message = resolveErrorMessage(error, "SDK 定位失败")
-    }
-  } finally {
-    if (requestId === playbackRequestId) {
-      playbackLoading.value = false
-      flushPendingSeek()
-    }
-  }
-}
-
 const handleSeekPlayback = async (offsetSeconds: number) => {
   if (!selectedSegment.value) {
-    return
-  }
-  if (activePlaybackMode.value === "hik") {
-    await handlePlay(offsetSeconds, { usePreroll: false, resetHikSpeedOnSeek: true })
     return
   }
   if (playbackLoading.value) {
     pendingSeekOffset = offsetSeconds
     return
   }
-  if (playback.playbackMode === "native") {
-    await handleNativeSeekPlayback(offsetSeconds)
-    return
-  }
-  await handlePlay(offsetSeconds, { usePreroll: true })
+  await handlePlay(offsetSeconds, { resetHikSpeedOnSeek: true })
 }
 
 const handleSeekPlaybackEnd = async (_offsetSeconds: number) => {
   if (!selectedSegment.value) {
     return
   }
-  const channelId = selectedSegment.value.channelId
   cancelHikSpeedReplay()
   playbackRequestId += 1
   playbackLoading.value = false
-  playback.streamType = "hik-sdk"
   playback.isPlaying = false
   playback.isPaused = false
-  playback.playUrl = null
   resetPlaybackSpeed()
   playback.seekOffsetSeconds = 0
-  playback.seekTargetSeconds = null
   playback.message = "已到录像结束，回放已停止"
   clearPendingSeek()
   await nextTick()
-  try {
-    if (activePlaybackMode.value === "hik") {
-      await hikPlaybackPlayerRef.value?.stopPlayback({ silent: true })
-      activePlaybackMode.value = null
-      return
-    }
-    await stopPlaybackApi(channelId)
-    activePlaybackMode.value = null
-  } catch (error) {
-    playback.message = resolveErrorMessage(error, "停止回放失败")
-  }
+  await stopPlaybackPlayerSilently()
 }
 
 const cancelDownload = () => {
@@ -1968,68 +1723,32 @@ const handleDownload = async (segment: PlaybackDaySegment) => {
   startDownloadEstimateTimer()
 
   try {
-    if (playback.playbackMode === "hik") {
-      const downloadableSpans = segment.spans.filter((item) => item.available && item.playbackUri)
-      if (!downloadableSpans.length) {
-        throw new Error("当前 HIK 录像片段缺少 playbackURI，无法下载。")
-      }
-      await ensureHikPlaybackConfig()
-      stopDownloadEstimateTimer()
-      downloadState.controller = null
-      downloadState.preparing = true
-      downloadState.progress = 35
-      downloadState.estimatedRemainingText = "下载任务已提交到浏览器"
-      downloadState.message = "正在启动 HIK 录像下载，请稍候..."
+    const downloadableSpans = segment.spans.filter((item) => item.available && item.playbackUri)
+    if (!downloadableSpans.length) {
+      throw new Error("当前 HIK 录像片段缺少 playbackURI，无法下载。")
+    }
+    await ensureHikPlaybackConfig()
+    stopDownloadEstimateTimer()
+    downloadState.controller = null
+    downloadState.preparing = true
+    downloadState.progress = 35
+    downloadState.estimatedRemainingText = "下载任务已提交到浏览器"
+    downloadState.message = "正在启动 HIK 录像下载，请稍候..."
 
-      for (const [index, span] of downloadableSpans.entries()) {
-        const fileName = buildHikDownloadFileName(segment, span, index)
-        await hikPlaybackPlayerRef.value?.downloadRecord({
-          playbackUri: span.playbackUri || "",
-          fileName,
-          dateDir: true,
-        })
-      }
-
-      downloadState.preparing = false
-      downloadState.progress = 100
-      downloadState.estimatedRemainingText = "请到浏览器下载列表查看进度"
-      downloadState.message = `HIK 录像下载任务已启动，共 ${downloadableSpans.length} 段`
-      void showPlaybackNotice(`HIK 录像下载任务已启动，共 ${downloadableSpans.length} 段，请到浏览器下载列表查看。`, "success")
-      return
+    for (const [index, span] of downloadableSpans.entries()) {
+      const fileName = buildHikDownloadFileName(segment, span, index)
+      await hikPlaybackPlayerRef.value?.downloadRecord({
+        playbackUri: span.playbackUri || "",
+        fileName,
+        dateDir: true,
+      })
     }
 
-    await downloadPlaybackFileApi(
-      {
-        recorder_id: segment.recorderId,
-        channel_id: segment.channelId,
-        camera_id: segment.cameraId ?? undefined,
-        start_time: segment.firstRecordStartTime,
-        end_time: segment.lastRecordEndTime,
-        stream_profile: "main",
-      },
-      {
-        signal: controller.signal,
-        onProgress: (event) => {
-          downloadState.preparing = false
-          stopDownloadEstimateTimer()
-          if (event.total && event.total > 0) {
-            downloadState.progress = Math.min(100, Math.round((event.loaded / event.total) * 100))
-            updateTransferEstimate(event.loaded, event.total)
-            downloadState.message = `正在下载录像 ${downloadState.progress}%，${downloadState.estimatedRemainingText}`
-            return
-          }
-          downloadState.progress = downloadState.progress >= 95 ? 95 : downloadState.progress + 5
-          updateTransferEstimate(event.loaded)
-          downloadState.message = `正在下载录像...，${downloadState.estimatedRemainingText}`
-        },
-      },
-    )
     downloadState.preparing = false
-    stopDownloadEstimateTimer()
     downloadState.progress = 100
-    downloadState.estimatedRemainingText = "已完成"
-    downloadState.message = "录像下载完成"
-    void showPlaybackNotice("录像下载完成", "success")
+    downloadState.estimatedRemainingText = "请到浏览器下载列表查看进度"
+    downloadState.message = `HIK 录像下载任务已启动，共 ${downloadableSpans.length} 段`
+    void showPlaybackNotice(`HIK 录像下载任务已启动，共 ${downloadableSpans.length} 段，请到浏览器下载列表查看。`, "success")
   } catch (error) {
     const canceled = (error as { code?: string; message?: string })?.code === "ERR_CANCELED"
       || (error as { message?: string })?.message?.includes("canceled")
@@ -2058,9 +1777,6 @@ const handleDownload = async (segment: PlaybackDaySegment) => {
 onBeforeUnmount(() => {
   stopHikClock()
   stopDownloadEstimateTimer()
-  if (playerErrorSuppressTimer !== null) {
-    window.clearTimeout(playerErrorSuppressTimer)
-  }
 })
 
 onMounted(async () => {
@@ -2088,13 +1804,7 @@ onMounted(async () => {
               <span class="playback-toolbar__speed">倍速 {{ playback.speed.toFixed(1) }}x</span>
             </div>
             <div class="playback-toolbar__group playback-toolbar__group--mode">
-              <select
-                v-model="playback.playbackMode"
-                class="playback-toolbar__mode-select"
-                disabled
-              >
-                <option value="hik">HIK</option>
-              </select>
+              <span class="playback-toolbar__mode-badge">WebSDK</span>
             </div>
             <div class="playback-toolbar__actions">
               <button class="app-button app-button--success playback-page__button" :disabled="playbackLoading" @click="() => void handlePlay()">
@@ -2122,7 +1832,6 @@ onMounted(async () => {
 
         <div ref="playerRef" class="playback-page__player-wrapper">
           <HikWebControlPlaybackPlayer
-            v-if="playback.playbackMode === 'hik'"
             ref="hikPlaybackPlayerRef"
             :config="hikPlaybackConfig"
             :message="playerNoticeMessage"
@@ -2132,33 +1841,8 @@ onMounted(async () => {
             :current-offset-seconds="hikDisplayOffsetSeconds"
             @seek="handleSeekPlayback"
             @seek-end="handleSeekPlaybackEnd"
+            @playback-end="handleSeekPlaybackEnd"
             @toggle-fullscreen="handleFullscreen"
-          />
-          <VideoPlayer
-            v-else
-            ref="videoPlayerRef"
-            title="录像回放"
-            :play-url="playback.playUrl"
-            :stream-type="playback.streamType"
-            :stream-profile="playback.streamProfile"
-            :is-playing="playback.isPlaying"
-            :is-paused="playback.isPaused"
-            :playback-rate="playback.speed"
-            :show-seek-bar="true"
-            :playback-start-time="selectedSegment?.axisStartTime || selectedSegment?.startTime || ''"
-            :playback-end-time="selectedSegment?.axisEndTime || selectedSegment?.endTime || ''"
-            :recorded-spans="selectedTimelineSpans"
-            :seek-base-seconds="playback.seekOffsetSeconds"
-            :seek-target-seconds="playback.seekTargetSeconds"
-            :camera-name="activeCameraName"
-            :camera-location="activeLocation"
-            :snapshot-url="playback.snapshotUrl"
-            :message="playerNoticeMessage"
-            :protocol-name="playback.playbackMode === 'native' ? 'SDK' : 'HLS'"
-            :active="true"
-            :suppress-errors="playback.playbackMode === 'native' || playbackLoading || playerErrorSuppressed"
-            @seek="handleSeekPlayback"
-            @seek-end="handleSeekPlaybackEnd"
           />
         </div>
       </div>
@@ -2233,7 +1917,7 @@ onMounted(async () => {
                 @visible-change="handleRangePickerVisibleChange"
                 @panel-change="handleRangePickerPanelChange"
               >
-                <template v-if="playback.playbackMode === 'hik'" #default="cell">
+                <template #default="cell">
                   <div
                     class="playback-page__date-cell"
                     :class="{
@@ -2255,7 +1939,7 @@ onMounted(async () => {
                 @click.prevent="handleBlockedRangePickerClick"
               />
             </div>
-            <div v-if="playback.playbackMode === 'hik' && queryForm.channelId && recordedDaysLoading" class="playback-page__range-hint">
+            <div v-if="queryForm.channelId && recordedDaysLoading" class="playback-page__range-hint">
               正在加载当月录像日期...
             </div>
             <template #actions>
@@ -2445,11 +2129,6 @@ onMounted(async () => {
   box-sizing: border-box;
 }
 
-.playback-page__player-wrapper:fullscreen :deep(.video-player) {
-  width: 100%;
-  height: 100%;
-}
-
 .playback-page__player-wrapper:fullscreen :deep(.hik-webcontrol-playback-player) {
   width: 100%;
   height: 100%;
@@ -2463,34 +2142,6 @@ onMounted(async () => {
 .playback-page__player-wrapper:fullscreen :deep(.hik-webcontrol-playback-player__surface) {
   inset: 0;
   border-radius: 0;
-}
-
-.playback-page__player-wrapper:fullscreen :deep(.video-player__screen) {
-  min-height: 0;
-  padding: 0;
-}
-
-.playback-page__player-wrapper:fullscreen :deep(.video-player__native) {
-  min-height: 0;
-  border-radius: 0;
-}
-
-.playback-page__player-wrapper:fullscreen :deep(.video-player__frame-hold) {
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 0;
-}
-
-.playback-page__player-wrapper:fullscreen :deep(.video-player__seekbar--overlay) {
-  display: flex;
-  left: 32px;
-  right: 32px;
-  bottom: 28px;
-}
-
-.playback-page__player-wrapper:fullscreen :deep(.video-player__seekbar--dock) {
-  display: none;
 }
 
 .playback-page__player-wrapper:fullscreen :deep(.hik-webcontrol-playback-player__seekbar--overlay) {
@@ -3056,47 +2707,21 @@ onMounted(async () => {
   margin-left: 0;
 }
 
-.playback-toolbar__mode-select {
-  width: 128px;
+.playback-toolbar__mode-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 128px;
   height: 36px;
-  min-height: 36px;
+  padding: 0 12px;
   border-radius: 12px;
   border: 1px solid rgba(132, 154, 180, 0.2);
   background-color: rgba(255, 255, 255, 0.92);
-  background-image:
-    linear-gradient(45deg, transparent 50%, #5d718d 50%),
-    linear-gradient(135deg, #5d718d 50%, transparent 50%);
-  background-position:
-    calc(100% - 18px) calc(50% - 1px),
-    calc(100% - 12px) calc(50% - 1px);
-  background-repeat: no-repeat;
-  background-size: 6px 6px, 6px 6px;
   box-shadow: 0 6px 18px rgba(18, 45, 77, 0.06);
   color: #4f6480;
   font-size: 13px;
   font-weight: 600;
-  line-height: 36px;
-  padding: 0 34px 0 12px;
-  cursor: pointer;
-  appearance: none;
-  box-sizing: border-box;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease, background-color 0.18s ease;
-}
-
-.playback-toolbar__mode-select:hover {
-  filter: brightness(0.99);
-  transform: translateY(-1px);
-}
-
-.playback-toolbar__mode-select:focus {
-  outline: none;
-  border-color: rgba(98, 160, 232, 0.35);
-  box-shadow: 0 0 0 3px rgba(73, 146, 255, 0.12), 0 6px 18px rgba(18, 45, 77, 0.06);
-}
-
-.playback-toolbar__mode-select:disabled {
-  cursor: not-allowed;
-  opacity: 0.72;
+  letter-spacing: 0.02em;
 }
 
 .playback-toolbar__actions {
