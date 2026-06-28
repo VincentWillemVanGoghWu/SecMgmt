@@ -129,6 +129,7 @@ const route = useRoute()
 const carouselSources = ref<PreviewSourceItem[]>([])
 const carouselPageIndex = ref(0)
 const carouselSwitching = ref(false)
+const hikFallbackInProgress = ref(false)
 let carouselTimer: number | null = null
 
 const factories = ref<FactoryRecord[]>([])
@@ -749,6 +750,23 @@ const applyWebControlConfigToSlot = (slot: PreviewSlot, config: LiveWebControlCo
   slot.message = ""
 }
 
+const resolveBrowserPreviewPayload = async (slot: PreviewSlot): Promise<SlotPreviewPayload> => {
+  const liveData =
+    slot.sourceType === "channel" && slot.channelId
+      ? await getChannelLiveVideoApi(slot.channelId, {
+          streamType: "hls",
+          streamProfile: DEFAULT_STREAM_PROFILE,
+        })
+      : await getLiveVideoApi(Number(slot.cameraId), {
+          streamType: "hls",
+          streamProfile: DEFAULT_STREAM_PROFILE,
+        })
+  return {
+    kind: "browser",
+    liveData,
+  }
+}
+
 const resolveSlotPreviewPayload = async (slot: PreviewSlot): Promise<SlotPreviewPayload> => {
   if (!slot.cameraId && !slot.channelId) {
     throw new Error("请先选择通道或摄像机")
@@ -775,20 +793,7 @@ const resolveSlotPreviewPayload = async (slot: PreviewSlot): Promise<SlotPreview
     }
   }
 
-  const liveData =
-    slot.sourceType === "channel" && slot.channelId
-      ? await getChannelLiveVideoApi(slot.channelId, {
-          streamType: DEFAULT_STREAM_TYPE,
-          streamProfile: DEFAULT_STREAM_PROFILE,
-        })
-      : await getLiveVideoApi(Number(slot.cameraId), {
-          streamType: DEFAULT_STREAM_TYPE,
-          streamProfile: DEFAULT_STREAM_PROFILE,
-        })
-  return {
-    kind: "browser",
-    liveData,
-  }
+  return await resolveBrowserPreviewPayload(slot)
 }
 
 const applyPreviewPayloadToSlot = (slot: PreviewSlot, payload: SlotPreviewPayload) => {
@@ -846,9 +851,6 @@ const closeAllPreviewSlots = async () => {
 }
 
 const handleChangeBrowseMode = async (nextMode: PreviewBrowseMode) => {
-  if (nextMode === "browser") {
-    return
-  }
   if (browseMode.value === nextMode) {
     return
   }
@@ -863,6 +865,52 @@ const handleChangeBrowseMode = async (nextMode: PreviewBrowseMode) => {
     browseMode.value = nextMode
   } finally {
     previewLoading.value = false
+  }
+}
+
+const handleHikPreviewFallback = async (_windowIndex: number, message: string) => {
+  if (browseMode.value !== "webcontrol" || hikFallbackInProgress.value) {
+    return
+  }
+  const fallbackSlots = visibleSlots.value.filter((slot) => slot.cameraId || slot.channelId)
+  if (!fallbackSlots.length) {
+    return
+  }
+
+  hikFallbackInProgress.value = true
+  previewLoading.value = true
+  ElMessage.warning(`HIK 预览失败，正在自动切换 HLS。${message}`)
+  try {
+    browseMode.value = "browser"
+    await nextTick()
+    const results = await Promise.allSettled(
+      fallbackSlots.map(async (slot) => {
+        slot.browseMode = "browser"
+        slot.webControlConfig = null
+        slot.playUrl = null
+        slot.message = "HIK 预览失败，正在切换 HLS..."
+        const payload = await resolveBrowserPreviewPayload(slot)
+        applyPreviewPayloadToSlot(slot, payload)
+      }),
+    )
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        return
+      }
+      const slot = fallbackSlots[index]
+      if (!slot) {
+        return
+      }
+      resetSlotPlayback(slot)
+      slot.browseMode = "browser"
+      slot.message = resolveErrorMessage(result.reason, "HLS 预览启动失败")
+    })
+    if (results.every((result) => result.status === "rejected")) {
+      await showPreviewErrorDialog("HIK 预览失败，自动切换 HLS 也未成功，请检查设备码流、RTSP 和 ffmpeg。")
+    }
+  } finally {
+    previewLoading.value = false
+    hikFallbackInProgress.value = false
   }
 }
 
@@ -1208,7 +1256,8 @@ onBeforeUnmount(() => {
                   <button
                     class="app-button"
                     :class="browseMode === 'browser' ? 'app-button--primary' : 'app-button--secondary'"
-                    disabled
+                    :disabled="previewLoading"
+                    @click="() => void handleChangeBrowseMode('browser')"
                   >
                     HLS
                   </button>
@@ -1307,6 +1356,7 @@ onBeforeUnmount(() => {
             :active-slot-index="activeSlotIndex"
             :slots="hikGridSlots"
             @select="handleActivateSlot"
+            @fallback="handleHikPreviewFallback"
           />
           <article
             v-else

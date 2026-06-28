@@ -35,6 +35,7 @@ type PlatformService struct {
 	repo            *repository.Repository
 	logger          *zap.Logger
 	hikvisionBridge *HikvisionAlarmBridgeService
+	liveStreams     *liveStreamManager
 }
 
 var hiddenMenuCodeSet = map[string]struct{}{
@@ -45,11 +46,17 @@ var hiddenMenuCodeSet = map[string]struct{}{
 var ErrDeviceDeleteForbidden = errors.New("device delete forbidden")
 
 func NewPlatformService(cfg *config.Config, repo *repository.Repository, logger *zap.Logger) *PlatformService {
-	return &PlatformService{cfg: cfg, repo: repo, logger: logger}
+	return &PlatformService{cfg: cfg, repo: repo, logger: logger, liveStreams: newLiveStreamManager(cfg, logger)}
 }
 
 func (s *PlatformService) SetHikvisionAlarmBridge(bridge *HikvisionAlarmBridgeService) {
 	s.hikvisionBridge = bridge
+}
+
+func (s *PlatformService) StopLiveStreams() {
+	if s.liveStreams != nil {
+		s.liveStreams.stopAll()
+	}
 }
 
 type UserPayload struct {
@@ -2786,6 +2793,9 @@ func (s *PlatformService) HandleSmartAICallback(payload SmartAICallbackPayload) 
 }
 
 func (s *PlatformService) GetLiveVideo(sourceType string, id uint, streamType, streamProfile string) (map[string]any, error) {
+	if defaultString(streamType, "hik-sdk") == "hls" {
+		return s.getLiveHLSVideo(sourceType, id, streamProfile)
+	}
 	playURL := fmt.Sprintf("%s/mock/live/%s/%d.m3u8?profile=%s", strings.TrimRight(s.cfg.BackendPublicBaseURL, "/"), sourceType, id, streamProfile)
 	return map[string]any{
 		"cameraId":          chooseID(sourceType == "camera", id),
@@ -2802,11 +2812,21 @@ func (s *PlatformService) GetLiveVideo(sourceType string, id uint, streamType, s
 }
 
 func (s *PlatformService) StopLiveVideo(sourceType string, id uint) map[string]any {
+	stoppedMain := false
+	stoppedSub := false
+	if s.liveStreams != nil {
+		stoppedMain = s.liveStreams.stop(sourceType, id, "main")
+		stoppedSub = s.liveStreams.stop(sourceType, id, "sub")
+	}
+	message := "已停止实时预览"
+	if stoppedMain || stoppedSub {
+		message = "已停止 HLS 实时预览"
+	}
 	return map[string]any{
 		"cameraId":  chooseID(sourceType == "camera", id),
 		"channelId": chooseID(sourceType == "channel", id),
 		"stopped":   true,
-		"message":   "已停止实时预览",
+		"message":   message,
 	}
 }
 
@@ -2915,13 +2935,26 @@ func (s *PlatformService) SearchPlaybackSegments(channelID uint, startAt, endAt 
 	}}, nil
 }
 
-func (s *PlatformService) GetPlaybackURL(channelID uint, streamType, streamProfile, playbackMode string) map[string]any {
+func (s *PlatformService) GetPlaybackURL(channelID uint, streamType, streamProfile, playbackMode string, startAt, endAt *time.Time) (map[string]any, error) {
 	start := time.Now().Add(-30 * time.Minute)
 	end := time.Now()
+	if startAt != nil {
+		start = *startAt
+	}
+	if endAt != nil {
+		end = *endAt
+	}
+	if !end.After(start) {
+		return nil, fmt.Errorf("invalid playback time range")
+	}
+	mode := defaultString(playbackMode, "hik")
+	if mode == "hls" || defaultString(streamType, "hik-sdk") == "hls" {
+		return s.getPlaybackHLSVideo(channelID, defaultString(streamProfile, "main"), start, end)
+	}
 	return map[string]any{
 		"streamType":        defaultString(streamType, "hik-sdk"),
 		"streamProfile":     defaultString(streamProfile, "main"),
-		"playbackMode":      defaultString(playbackMode, "hik"),
+		"playbackMode":      mode,
 		"playUrl":           fmt.Sprintf("%s/mock/playback/channel/%d.m3u8", strings.TrimRight(s.cfg.BackendPublicBaseURL, "/"), channelID),
 		"startTime":         start.Format(time.RFC3339),
 		"endTime":           end.Format(time.RFC3339),
@@ -2930,7 +2963,7 @@ func (s *PlatformService) GetPlaybackURL(channelID uint, streamType, streamProfi
 		"playableInBrowser": false,
 		"diagnosticMessage": "当前返回模拟回放地址",
 		"sourceRtsp":        fmt.Sprintf("rtsp://mock/playback/%d", channelID),
-	}
+	}, nil
 }
 
 func (s *PlatformService) DownloadPlaybackFile(channelID uint, startTime, endTime time.Time, alarmNo string) (string, string, error) {
@@ -2982,7 +3015,15 @@ func (s *PlatformService) DownloadPlaybackFile(channelID uint, startTime, endTim
 }
 
 func (s *PlatformService) StopPlayback(channelID uint) map[string]any {
-	return map[string]any{"channelId": channelID, "stopped": true, "message": "已停止回放"}
+	stopped := false
+	if s.liveStreams != nil {
+		stopped = s.liveStreams.stopPlayback(channelID)
+	}
+	message := "已停止回放"
+	if stopped {
+		message = "已停止 HLS 回放"
+	}
+	return map[string]any{"channelId": channelID, "stopped": true, "message": message}
 }
 
 func buildPlaybackDownloadFilename(alarmNo, recorderName, channelName string, startTime, endTime time.Time) string {

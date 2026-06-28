@@ -10,7 +10,7 @@ import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 const { createProxyServer } = httpProxy
 
 type ProxyOptionsLike = { target?: string | URL }
-type ProxyResponseLike = { statusCode?: number }
+type ProxyResponseLike = { statusCode?: number; headers?: Record<string, string | string[] | undefined> }
 const HIK_PROXY_HTTP_HEADER = 'x-hik-proxy-target'
 const HIK_PROXY_WS_TARGET_PARAM = '__hikProxyTarget'
 
@@ -46,6 +46,11 @@ const resolveRequestUrl = (value: string | undefined) => {
   }
 }
 
+const resolveHeaderValue = (request: IncomingMessage, headerName: string) => {
+  const value = request.headers[headerName]
+  return Array.isArray(value) ? value[0] : value
+}
+
 const normalizeTarget = (value: string | undefined, protocol: 'http' | 'https') => {
   if (!value) {
     return null
@@ -54,8 +59,7 @@ const normalizeTarget = (value: string | undefined, protocol: 'http' | 'https') 
 }
 
 const resolveHttpProxyTarget = (request: IncomingMessage) => {
-  const explicitTarget = request.headers[HIK_PROXY_HTTP_HEADER]
-  const headerTarget = Array.isArray(explicitTarget) ? explicitTarget[0] : explicitTarget
+  const headerTarget = resolveHeaderValue(request, HIK_PROXY_HTTP_HEADER)
   const normalizedHeaderTarget = normalizeTarget(headerTarget, 'http')
   if (normalizedHeaderTarget) {
     return normalizedHeaderTarget
@@ -106,6 +110,7 @@ const applyProxyRequestHeaders = (
   if (target) {
     proxyRequest.setHeader('host', new URL(target).host)
   }
+  proxyRequest.removeHeader(HIK_PROXY_HTTP_HEADER)
   proxyRequest.removeHeader('origin')
   proxyRequest.removeHeader('referer')
   proxyRequest.removeHeader('sec-fetch-site')
@@ -140,6 +145,10 @@ export default defineConfig({
           applyProxyRequestHeaders(proxyReq, typeof options.target === 'string' ? options.target : undefined)
         })
         httpProxy.on('proxyRes', (proxyRes: ProxyResponseLike, req: IncomingMessage, _res: ServerResponse) => {
+          if (proxyRes.headers) {
+            delete proxyRes.headers['www-authenticate']
+            delete proxyRes.headers['WWW-Authenticate']
+          }
           const target = resolveHttpProxyTarget(req) ?? 'unknown-target'
           console.log(`[hik-proxy] ${req.method} ${req.url} -> ${target} ${proxyRes.statusCode ?? ''}`)
         })

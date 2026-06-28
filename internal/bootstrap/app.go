@@ -58,6 +58,7 @@ func Build(rootDir string) (*App, error) {
 		Logger: logger,
 		Router: engine,
 		Close: func() {
+			platformService.StopLiveStreams()
 			hikvisionBridgeService.Stop()
 		},
 	}, nil

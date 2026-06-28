@@ -31,6 +31,13 @@
 | `MEDIA_ROOT_DIR` | `<root>/media` | 按需 | 媒体文件、截图、下载文件等本地存储目录。 |
 | `MEDIA_MOUNT_PATH` | `/media` | 按需 | 静态资源挂载路径。 |
 | `BACKEND_PUBLIC_BASE_URL` | `http://127.0.0.1:8000` | 是 | 后端对外访问地址，用于生成可访问链接。 |
+| `FFMPEG_PATH` | `ffmpeg` | 按需 | HLS 实时预览使用的 ffmpeg 可执行文件路径。 |
+| `LIVE_HLS_SEGMENT_SECONDS` | `2` | 按需 | HLS 分片时长，单位秒。 |
+| `LIVE_HLS_LIST_SIZE` | `6` | 按需 | HLS 播放列表保留的分片数量。 |
+| `LIVE_HLS_START_TIMEOUT_SECONDS` | `30` | 按需 | 等待首个 HLS 播放列表生成的超时时间，H.265 起流或长 GOP 设备建议保留较大值。 |
+| `LIVE_HLS_SESSION_TTL_SECONDS` | `300` | 按需 | HLS 会话复用过期时间，单位秒。 |
+| `LIVE_HLS_MAX_SESSIONS` | `16` | 按需 | HLS 实时预览最大并发会话数。 |
+| `LIVE_HLS_TRANSCODE` | `true` | 按需 | 是否将 RTSP 视频转码为兼容性更强的 H.264/yuv420p HLS；关闭时使用 `copy`，CPU 更低但浏览器兼容性取决于原始编码。 |
 | `AI_CALLBACK_SECRET` | `change-ai-signature-secret` | 是 | AI 回调签名密钥。 |
 | `PUSH_HTTP_TIMEOUT_SECONDS` | `10` | 按需 | HTTP 推送超时时间。 |
 
@@ -68,6 +75,9 @@ AI_CALLBACK_SECRET=dev-ai-callback-secret
 BACKEND_PUBLIC_BASE_URL=http://127.0.0.1:8000
 MEDIA_ROOT_DIR=./media
 MEDIA_MOUNT_PATH=/media
+FFMPEG_PATH=ffmpeg
+LIVE_HLS_START_TIMEOUT_SECONDS=30
+LIVE_HLS_TRANSCODE=true
 PUSH_HTTP_TIMEOUT_SECONDS=10
 ```
 
@@ -118,6 +128,8 @@ MEDIA_ROOT_DIR=/data/secmgmt/media
 MEDIA_MOUNT_PATH=/media
 BACKEND_PUBLIC_BASE_URL=https://security.example.com
 ```
+
+HLS 实时预览会在 `MEDIA_ROOT_DIR/live/...` 下生成临时 m3u8 和 ts 分片，并通过 `MEDIA_MOUNT_PATH` 对外访问。生产环境需要确保后端进程能执行 `FFMPEG_PATH`，且浏览器能访问 `BACKEND_PUBLIC_BASE_URL + MEDIA_MOUNT_PATH`。
 
 生成访问地址时通常应组合为：
 

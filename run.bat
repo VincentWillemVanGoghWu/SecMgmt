@@ -40,6 +40,8 @@ echo Done.
 echo Backend: http://127.0.0.1:8000
 echo Frontend: http://127.0.0.1:5173
 echo.
+echo Stop: run "%ROOT_DIR%\stop.bat" or close the backend/frontend command windows.
+echo.
 echo If the frontend fails, check whether "%FRONTEND_DIR%\node_modules" exists and install dependencies first.
 exit /b 0
 

@@ -25,6 +25,7 @@ export const getLiveVideoApi = async (
         stream_type: params?.streamType ?? "hik-sdk",
         stream_profile: params?.streamProfile ?? "main",
       },
+      timeout: params?.streamType === "hls" ? 45000 : undefined,
     }),
   )
 
@@ -38,6 +39,7 @@ export const getChannelLiveVideoApi = async (
         stream_type: params?.streamType ?? "hik-sdk",
         stream_profile: params?.streamProfile ?? "main",
       },
+      timeout: params?.streamType === "hls" ? 45000 : undefined,
     }),
   )
 
