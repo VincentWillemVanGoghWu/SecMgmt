@@ -153,7 +153,7 @@ const resolveHttpStatusMessage = (payload: HikSdkXml, status?: number) => {
   const statusString = getXmlText(xml, "statusString")
   const subStatusCode = getXmlText(xml, "subStatusCode")
   if (status === 401 || subStatusCode.toLowerCase().includes("unauthorized")) {
-    return "海康设备认证请求被拒绝，请检查 HTTP/HTTPS 协议、端口或代理转发。"
+    return "海康设备登录失败，请检查设备账号密码。"
   }
   if (status === 403) {
     return "设备不支持当前海康无插件预览方式，或代理转发被拒绝。"

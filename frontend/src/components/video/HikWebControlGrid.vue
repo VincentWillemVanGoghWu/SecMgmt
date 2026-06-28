@@ -101,7 +101,6 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   select: [index: number]
-  fallback: [index: number, message: string]
 }>()
 
 const containerRef = useTemplateRef<HTMLDivElement>("containerRef")
@@ -269,7 +268,7 @@ const resolveHttpStatusMessage = (payload: HikSdkXml, status?: number) => {
   const statusString = getXmlText(xml, "statusString")
   const subStatusCode = getXmlText(xml, "subStatusCode")
   if (status === 401 || subStatusCode.toLowerCase().includes("unauthorized")) {
-    return "海康设备认证请求被拒绝，请检查 HTTP/HTTPS 协议、端口或代理转发。"
+    return "海康设备登录失败，请检查设备账号密码。"
   }
   if (status === 403) {
     return "设备不支持当前海康无插件预览方式，或代理转发被拒绝。"
@@ -393,7 +392,6 @@ const handleWindowPreviewError = (windowIndex: number, message: string) => {
     return
   }
   updateWindowState(windowIndex, { status: "idle", message })
-  emit("fallback", windowIndex, message)
   failWindowRejector(windowIndex, message)
 }
 
@@ -784,7 +782,6 @@ const startWindowPreview = async (sdkRef: HikWebVideoCtrl, slot: HikGridSlot, wi
 
     const message = normalizePreviewStartError(lastError)
     updateWindowState(windowIndex, { status: "idle", message })
-    emit("fallback", windowIndex, message)
     throw new Error(message)
   } finally {
     startingWindowIndexes.delete(windowIndex)
@@ -843,11 +840,6 @@ const executeStartGrid = async () => {
       status: "idle",
       message: index < props.layoutMode ? message : "空闲窗口",
     }))
-    props.slots.slice(0, props.layoutMode).forEach((slot, index) => {
-      if (slot?.isPlaying && slot.config) {
-        emit("fallback", index, message)
-      }
-    })
   }
 }
 

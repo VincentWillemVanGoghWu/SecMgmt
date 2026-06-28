@@ -1685,21 +1685,7 @@ func (h *PlatformHandler) GetPlaybackURL(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "missing channel_id")
 		return
 	}
-	startTime, startOK := firstTimeQuery(c, "start_time", "startTime")
-	endTime, endOK := firstTimeQuery(c, "end_time", "endTime")
-	data, err := h.platformService.GetPlaybackURL(
-		channelID,
-		c.Query("stream_type"),
-		c.Query("stream_profile"),
-		c.Query("playback_mode"),
-		optionalTime(startTime, startOK),
-		optionalTime(endTime, endOK),
-	)
-	if err != nil {
-		handlePlatformError(c, err)
-		return
-	}
-	response.OK(c, data)
+	response.OK(c, h.platformService.GetPlaybackURL(channelID, c.Query("stream_type"), c.Query("stream_profile"), c.Query("playback_mode")))
 }
 
 func (h *PlatformHandler) SeekPlayback(c *gin.Context) {
@@ -1708,33 +1694,7 @@ func (h *PlatformHandler) SeekPlayback(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "missing channel_id")
 		return
 	}
-	startTime, startOK := firstTimeQuery(c, "start_time", "startTime")
-	endTime, endOK := firstTimeQuery(c, "end_time", "endTime")
-	if targetTime, ok := firstTimeQuery(c, "target_time", "targetTime"); ok {
-		prebufferSeconds := firstIntQuery(c, 0, "prebuffer_seconds", "prebufferSeconds")
-		if prebufferSeconds > 0 {
-			targetTime = targetTime.Add(-time.Duration(prebufferSeconds) * time.Second)
-		}
-		startTime = targetTime
-		startOK = true
-		if !endOK {
-			endTime = targetTime.Add(30 * time.Minute)
-			endOK = true
-		}
-	}
-	data, err := h.platformService.GetPlaybackURL(
-		channelID,
-		c.Query("stream_type"),
-		c.Query("stream_profile"),
-		c.Query("playback_mode"),
-		optionalTime(startTime, startOK),
-		optionalTime(endTime, endOK),
-	)
-	if err != nil {
-		handlePlatformError(c, err)
-		return
-	}
-	response.OK(c, data)
+	response.OK(c, h.platformService.GetPlaybackURL(channelID, c.Query("stream_type"), c.Query("stream_profile"), c.Query("playback_mode")))
 }
 
 func (h *PlatformHandler) DownloadPlaybackFile(c *gin.Context) {
@@ -1979,17 +1939,6 @@ func firstUintQuery(c *gin.Context, keys ...string) uint {
 		}
 	}
 	return 0
-}
-
-func firstIntQuery(c *gin.Context, fallback int, keys ...string) int {
-	for _, key := range keys {
-		if raw := strings.TrimSpace(c.Query(key)); raw != "" {
-			if value, err := strconv.Atoi(raw); err == nil {
-				return value
-			}
-		}
-	}
-	return fallback
 }
 
 func firstStringQuery(c *gin.Context, keys ...string) string {

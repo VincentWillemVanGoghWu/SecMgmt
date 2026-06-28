@@ -17,13 +17,6 @@
 | `MEDIA_ROOT_DIR` | `<root>/media` | 媒体物理目录，启动时自动创建 |
 | `MEDIA_MOUNT_PATH` | `/media` | Gin 静态访问路径 |
 | `BACKEND_PUBLIC_BASE_URL` | `http://127.0.0.1:8000` | 生成媒体绝对 URL |
-| `FFMPEG_PATH` | `ffmpeg` | HLS 实时预览使用的 ffmpeg 可执行文件路径 |
-| `LIVE_HLS_SEGMENT_SECONDS` | `2` | HLS 分片时长，单位秒 |
-| `LIVE_HLS_LIST_SIZE` | `6` | HLS 播放列表保留的分片数量 |
-| `LIVE_HLS_START_TIMEOUT_SECONDS` | `30` | 等待首个 HLS 播放列表生成的超时时间，H.265 起流或长 GOP 设备建议保留较大值 |
-| `LIVE_HLS_SESSION_TTL_SECONDS` | `300` | HLS 会话复用过期时间，单位秒 |
-| `LIVE_HLS_MAX_SESSIONS` | `16` | HLS 实时预览最大并发会话数 |
-| `LIVE_HLS_TRANSCODE` | `true` | 是否转码为兼容性更强的 H.264/yuv420p HLS；关闭时使用原始编码 copy |
 | `AI_CALLBACK_SECRET` | `change-ai-signature-secret` | AI 回调签名 secret |
 | `PUSH_HTTP_TIMEOUT_SECONDS` | `10` | 外部推送 HTTP 超时 |
 | `VITE_API_BASE_URL` | `http://127.0.0.1:8000/api` | 前端构建/开发 API 地址 |

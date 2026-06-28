@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useRoute } from "vue-router"
-import { ElMessage, ElMessageBox } from "element-plus"
+import { ElMessageBox } from "element-plus"
 import {
   ArrowRight,
   FullScreen,
@@ -47,7 +47,6 @@ const searching = ref(false)
 const playbackLoading = ref(false)
 const snapshotLoading = ref(false)
 const playerErrorSuppressed = ref(false)
-const hikFallbackInProgress = ref(false)
 const hikDisplayOffsetSeconds = ref(0)
 const playerRef = ref<HTMLElement | null>(null)
 const videoPlayerRef = ref<{
@@ -535,20 +534,6 @@ watch(
   () => playback.playbackMode,
   (mode) => {
     resetRecordedDayHighlights()
-    if (!hikFallbackInProgress.value) {
-      playback.playUrl = null
-      playback.isPlaying = false
-      playback.isPaused = false
-      activePlaybackMode.value = null
-      resetPlaybackSpeed()
-      stopHikClock()
-      playback.streamType = mode === "hls" ? "hls" : "hik-sdk"
-      if (selectedSegment.value) {
-        playback.message = mode === "hik"
-          ? "已选择录像片段，点击播放启动 HIK 回放"
-          : "已选择录像片段，点击播放启动 HLS 回放"
-      }
-    }
     if (mode === "hik" && queryForm.channelId) {
       void loadRecordedDaysForPanel(getInitialRangePickerPanelDates())
     }
@@ -1308,17 +1293,6 @@ const buildHikSegments = (
     queryEndTime,
   )
 
-const searchBackendPlaybackSegments = async (startTime: string, endTime: string) => {
-  const rawSegments = await searchPlaybackSegmentsApi({
-    recorder_id: queryForm.recorderId ? Number(queryForm.recorderId) : undefined,
-    channel_id: queryForm.channelId ? Number(queryForm.channelId) : undefined,
-    start_time: startTime,
-    end_time: endTime,
-    record_type: queryForm.recordType,
-  })
-  return aggregateSegmentsToDaily(rawSegments, startTime, endTime)
-}
-
 const searchSegments = async (validateChannel = true, autoPlayFirst = false) => {
   ensureDefaultRange()
   if (validateChannel && !queryForm.channelId) {
@@ -1338,7 +1312,14 @@ const searchSegments = async (validateChannel = true, autoPlayFirst = false) => 
       })
       segments.value = source && records ? buildHikSegments(records, source, startTime, endTime) : []
     } else {
-      segments.value = await searchBackendPlaybackSegments(startTime, endTime)
+      const rawSegments = await searchPlaybackSegmentsApi({
+        recorder_id: queryForm.recorderId ? Number(queryForm.recorderId) : undefined,
+        channel_id: queryForm.channelId ? Number(queryForm.channelId) : undefined,
+        start_time: startTime,
+        end_time: endTime,
+        record_type: queryForm.recordType,
+      })
+      segments.value = aggregateSegmentsToDaily(rawSegments, startTime, endTime)
     }
     if (segments.value[0]) {
       if (autoPlayFirst) {
@@ -1358,32 +1339,6 @@ const searchSegments = async (validateChannel = true, autoPlayFirst = false) => 
       )
     }
   } catch (error) {
-    if (playback.playbackMode === "hik") {
-      const hikMessage = resolveErrorMessage(error, "HIK 搜索录像失败")
-      try {
-        ElMessage.warning("HIK 录像搜索失败，正在尝试 HLS...")
-        playback.playbackMode = "hls"
-        await nextTick()
-        segments.value = await searchBackendPlaybackSegments(startTime, endTime)
-        if (segments.value[0]) {
-          if (autoPlayFirst) {
-            await handleSelectAndPlay(segments.value[0])
-          } else {
-            selectSegment(segments.value[0])
-          }
-        } else {
-          clearSegments()
-        }
-        if (!segments.value.length) {
-          void showPlaybackNotice("HIK 不兼容，已切换 HLS，但未找到录像片段。请扩大时间范围或检查设备侧录像。", "warning")
-        }
-        return
-      } catch (hlsError) {
-        const hlsMessage = resolveErrorMessage(hlsError, "HLS 搜索录像失败")
-        void showPlaybackNotice(`HIK 和 HLS 录像查询均失败。HIK：${hikMessage}；HLS：${hlsMessage}`, "error")
-        return
-      }
-    }
     void showPlaybackNotice(resolveErrorMessage(error, "查询录像片段失败"), "error")
   } finally {
     searching.value = false
@@ -1487,35 +1442,6 @@ const resolvePlaybackOffsetSeconds = (segment: PlaybackDaySegment, offsetSeconds
   return Math.min(Math.max(0, Math.floor(offsetSeconds)), Math.max(0, durationSeconds - 1))
 }
 
-const handleHikPlaybackFallback = async (message: string, offsetSeconds = hikDisplayOffsetSeconds.value) => {
-  if (playback.playbackMode !== "hik" || !selectedSegment.value || hikFallbackInProgress.value) {
-    return
-  }
-  hikFallbackInProgress.value = true
-  const targetOffsetSeconds = resolvePlaybackOffsetSeconds(selectedSegment.value, offsetSeconds)
-  try {
-    ElMessage.warning("HIK 回放失败，正在切换 HLS...")
-    playback.message = message ? `HIK 回放失败，正在切换 HLS：${message}` : "HIK 回放失败，正在切换 HLS..."
-    cancelHikSpeedReplay()
-    stopHikClock()
-    try {
-      await hikPlaybackPlayerRef.value?.stopPlayback({ silent: true })
-    } catch {
-      // Ignore HIK stop errors while falling back to HLS.
-    }
-    playback.playbackMode = "hls"
-    activePlaybackMode.value = null
-    playback.playUrl = null
-    playback.isPlaying = false
-    playback.isPaused = false
-    resetPlaybackSpeed()
-    await nextTick()
-    await handlePlay(targetOffsetSeconds, { usePreroll: true })
-  } finally {
-    hikFallbackInProgress.value = false
-  }
-}
-
 const handlePlay = async (
   offsetSeconds = 0,
   options: { usePreroll?: boolean; resetHikSpeedOnSeek?: boolean } = {},
@@ -1590,8 +1516,7 @@ const handlePlay = async (
       return
     }
 
-    const requestStreamType: StreamType = playback.playbackMode === "hls" ? "hls" : "hik-sdk"
-    playback.streamType = requestStreamType
+    playback.streamType = "hik-sdk"
     const targetOffsetSeconds = resolvePlaybackOffsetSeconds(selectedSegment.value, offsetSeconds)
     const targetPoint = buildPlayablePoint(selectedSegment.value, targetOffsetSeconds)
     if (!targetPoint) {
@@ -1612,7 +1537,7 @@ const handlePlay = async (
       camera_id: selectedSegment.value.cameraId ?? undefined,
       start_time: playbackStartTime,
       end_time: selectedSegment.value.axisEndTime,
-      stream_type: requestStreamType,
+      stream_type: "hik-sdk",
       stream_profile: "main",
       prebuffer_seconds: prerollSeconds,
       playback_mode: playback.playbackMode,
@@ -1621,8 +1546,8 @@ const handlePlay = async (
       return
     }
     playback.playUrl = `${data.playUrl}${data.playUrl.includes("?") ? "&" : "?"}_ts=${Date.now()}`
-    playback.streamType = data.streamType || requestStreamType
-    playback.streamProfile = data.streamProfile || "main"
+    playback.streamType = "hik-sdk"
+    playback.streamProfile = "main"
     playback.isPlaying = true
     playback.isPaused = false
     activePlaybackMode.value = playback.playbackMode
@@ -1639,12 +1564,7 @@ const handlePlay = async (
     )
   } catch (error) {
     if (requestId === playbackRequestId) {
-      const message = resolveErrorMessage(error, "开始回放失败")
-      if (playback.playbackMode === "hik" && !hikFallbackInProgress.value) {
-        await handleHikPlaybackFallback(message, offsetSeconds)
-        return
-      }
-      playback.message = message
+      playback.message = resolveErrorMessage(error, "开始回放失败")
     }
   } finally {
     if (requestId === playbackRequestId) {
@@ -1956,7 +1876,7 @@ const handleSeekPlaybackEnd = async (_offsetSeconds: number) => {
   cancelHikSpeedReplay()
   playbackRequestId += 1
   playbackLoading.value = false
-  playback.streamType = playback.playbackMode === "hls" ? "hls" : "hik-sdk"
+  playback.streamType = "hik-sdk"
   playback.isPlaying = false
   playback.isPaused = false
   playback.playUrl = null
@@ -2169,10 +2089,9 @@ onMounted(async () => {
               <select
                 v-model="playback.playbackMode"
                 class="playback-toolbar__mode-select"
-                :disabled="playbackLoading"
+                disabled
               >
                 <option value="hik">HIK</option>
-                <option value="hls">HLS</option>
               </select>
             </div>
             <div class="playback-toolbar__actions">
@@ -2212,7 +2131,6 @@ onMounted(async () => {
             @seek="handleSeekPlayback"
             @seek-end="handleSeekPlaybackEnd"
             @toggle-fullscreen="handleFullscreen"
-            @fallback="handleHikPlaybackFallback"
           />
           <VideoPlayer
             v-else

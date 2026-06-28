@@ -80,7 +80,6 @@ const emit = defineEmits<{
   seekEnd: [offsetSeconds: number]
   toggleFullscreen: [fullscreen?: boolean]
   playbackEnd: [offsetSeconds: number]
-  fallback: [message: string]
 }>()
 
 const props = withDefaults(
@@ -544,7 +543,7 @@ const resolveHttpStatusMessage = (payload: HikSdkXml, status?: number) => {
   const statusString = xml ? getXmlText(xml, "statusString") : ""
   const subStatusCode = xml ? getXmlText(xml, "subStatusCode") : ""
   if (status === 401 || subStatusCode.toLowerCase().includes("unauthorized")) {
-    return "设备认证请求被拒绝，请检查 HTTP/HTTPS 协议、端口或代理转发。"
+    return "设备登录失败，请检查账号密码。"
   }
   if (status === 403) {
     return "设备不支持当前 HIK 无插件方式，或代理转发被拒绝。"
@@ -908,13 +907,11 @@ const handleSdkPluginEvent = (errorCode: number) => {
       }
       playerMessage.value = message
       playerState.value = "idle"
-      emit("fallback", message)
     }, TRANSIENT_PLUGIN_ERROR_DELAY_MS)
     return
   }
   playerMessage.value = message
   playerState.value = "idle"
-  emit("fallback", message)
 }
 
 const parseRecordSearchXml = (xmlDoc: Document | null): { status: string; items: HikPlaybackRecord[] } => {
