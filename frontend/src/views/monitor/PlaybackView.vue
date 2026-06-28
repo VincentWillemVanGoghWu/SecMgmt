@@ -476,14 +476,21 @@ watch(
       : null
 
     const activeFactory = matchedSource
-      ? tree.find((factory) => factory.id === matchedSource.factoryId) ?? tree[0]
-      : tree.find((factory) => buildFactoryKey(factory.id) === expandedFactoryKey.value) ?? tree[0]
-    expandedFactoryKey.value = buildFactoryKey(activeFactory.id)
-
-    const activeZone = matchedSource
-      ? activeFactory.zones.find((zone) => zone.id === (matchedSource.zoneId ?? `unassigned-${activeFactory.id}`)) ?? activeFactory.zones[0]
-      : activeFactory.zones.find((zone) => buildZoneKey(activeFactory.id, zone.id) === expandedZoneKey.value) ?? activeFactory.zones[0]
-    expandedZoneKey.value = buildZoneKey(activeFactory.id, activeZone.id)
+      ? tree.find((factory) => factory.id === matchedSource.factoryId && buildFactoryKey(factory.id) === expandedFactoryKey.value)
+      : tree.find((factory) => buildFactoryKey(factory.id) === expandedFactoryKey.value)
+    if (!activeFactory) {
+      expandedFactoryKey.value = null
+      expandedZoneKey.value = null
+    } else {
+      const activeZone = matchedSource
+        ? activeFactory.zones.find((zone) =>
+          zone.id === (matchedSource.zoneId ?? `unassigned-${activeFactory.id}`)
+          && buildZoneKey(activeFactory.id, zone.id) === expandedZoneKey.value)
+        : activeFactory.zones.find((zone) => buildZoneKey(activeFactory.id, zone.id) === expandedZoneKey.value)
+      if (!activeZone) {
+        expandedZoneKey.value = null
+      }
+    }
 
     if (matchedSource) {
       selectedSourceKey.value = matchedSource.key
@@ -500,9 +507,6 @@ watch(
     }
     hikPlaybackConfig.value = null
     resetRecordedDayHighlights()
-    if (channelId && rangePickerVisible.value) {
-      void loadRecordedDaysForPanel(getInitialRangePickerPanelDates())
-    }
   },
 )
 
@@ -2147,9 +2151,9 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 260px;
-  height: 260px;
-  flex: 0 0 260px;
+  min-height: 418px;
+  height: 418px;
+  flex: 0 0 418px;
   overflow: hidden;
   border-bottom: 1px solid rgba(143, 166, 191, 0.16);
   padding-bottom: 10px;

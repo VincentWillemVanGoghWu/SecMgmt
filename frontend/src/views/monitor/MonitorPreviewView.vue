@@ -399,8 +399,13 @@ watch(
       return
     }
 
-    const activeFactory = tree.find((factory) => buildFactoryKey(factory.id) === expandedFactoryKey.value) ?? tree[0]
-    expandedFactoryKey.value = buildFactoryKey(activeFactory.id)
+    const activeFactory = tree.find((factory) => buildFactoryKey(factory.id) === expandedFactoryKey.value)
+    if (!activeFactory) {
+      expandedFactoryKey.value = null
+      expandedZoneKey.value = null
+      expandedGroupKey.value = null
+      return
+    }
 
     if (!activeFactory.zones.length) {
       expandedZoneKey.value = null
@@ -408,19 +413,22 @@ watch(
       return
     }
 
-    const activeZone =
-      activeFactory.zones.find((zone) => buildZoneKey(activeFactory.id, zone.id) === expandedZoneKey.value) ?? activeFactory.zones[0]
-    expandedZoneKey.value = buildZoneKey(activeFactory.id, activeZone.id)
+    const activeZone = activeFactory.zones.find((zone) => buildZoneKey(activeFactory.id, zone.id) === expandedZoneKey.value)
+    if (!activeZone) {
+      expandedZoneKey.value = null
+      expandedGroupKey.value = null
+      return
+    }
 
     if (!activeZone.groups.length) {
       expandedGroupKey.value = null
       return
     }
 
-    const activeGroup =
-      activeZone.groups.find((group) => buildGroupKey(activeFactory.id, activeZone.id, group.id) === expandedGroupKey.value) ??
-      activeZone.groups[0]
-    expandedGroupKey.value = buildGroupKey(activeFactory.id, activeZone.id, activeGroup.id)
+    const activeGroup = activeZone.groups.find((group) => buildGroupKey(activeFactory.id, activeZone.id, group.id) === expandedGroupKey.value)
+    if (!activeGroup) {
+      expandedGroupKey.value = null
+    }
   },
   { immediate: true },
 )
