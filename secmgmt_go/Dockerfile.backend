@@ -1,0 +1,72 @@
+ARG DOCKER_LIBRARY_MIRROR=docker.m.daocloud.io/library
+FROM ${DOCKER_LIBRARY_MIRROR}/golang:1.26.4-bookworm AS builder
+
+ARG APT_MIRROR_URL=http://mirrors.aliyun.com/debian
+ARG APT_SECURITY_MIRROR_URL=http://mirrors.aliyun.com/debian-security
+ARG GOPROXY=https://goproxy.cn,direct
+
+WORKDIR /src
+
+RUN cat > /etc/apt/sources.list.d/debian.sources <<EOF
+Types: deb
+URIs: ${APT_MIRROR_URL}
+Suites: bookworm bookworm-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: ${APT_SECURITY_MIRROR_URL}
+Suites: bookworm-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV GOPROXY=${GOPROXY}
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+COPY third_party/HCNetSDK_Linux64 ./third_party/HCNetSDK_Linux64
+
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o /out/secmgmt-go ./cmd/server
+
+FROM ${DOCKER_LIBRARY_MIRROR}/debian:bookworm-slim
+
+ARG APT_MIRROR_URL=http://mirrors.aliyun.com/debian
+ARG APT_SECURITY_MIRROR_URL=http://mirrors.aliyun.com/debian-security
+
+RUN cat > /etc/apt/sources.list.d/debian.sources <<EOF
+Types: deb
+URIs: ${APT_MIRROR_URL}
+Suites: bookworm
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: ${APT_SECURITY_MIRROR_URL}
+Suites: bookworm-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libgcc-s1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /out/secmgmt-go /app/secmgmt-go
+COPY --from=builder /src/third_party/HCNetSDK_Linux64 /app/third_party/HCNetSDK_Linux64
+
+RUN mkdir -p /app/media
+
+ENV GIN_MODE=release
+ENV LD_LIBRARY_PATH=/app/third_party/HCNetSDK_Linux64/Library:/app/third_party/HCNetSDK_Linux64/Library/HCNetSDKCom
+
+EXPOSE 8000
+
+CMD ["./secmgmt-go"]
