@@ -18,5 +18,6 @@ frontend/.pytest_cache/
 media/
 third_party/HCNetSDK_Linux64/Demo/
 third_party/HCNetSDK_Linux64/开发文档/
+third_party/HCNetSDK_Win64/
 __pycache__/
 .pytest_cache/
