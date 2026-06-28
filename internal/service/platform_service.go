@@ -1107,6 +1107,7 @@ func (s *PlatformService) SyncRecorderChannels(recorderID uint) (map[string]any,
 		}
 		deviceChannels = buildDefaultRecorderSyncChannels(recorder.ChannelCount)
 	}
+	deviceChannels = completeRecorderSyncChannels(deviceChannels, recorder.ChannelCount)
 
 	now := time.Now()
 	if err := s.db().Transaction(func(tx *gorm.DB) error {
@@ -1193,13 +1194,13 @@ type hikInputProxyChannelStatusList struct {
 }
 
 type hikInputProxyChannelStatus struct {
-	ID                        int    `xml:"id"`
-	Name                      string `xml:"name"`
-	DeviceName                string `xml:"deviceName"`
-	SourceInputPortDescriptor string `xml:"sourceInputPortDescriptor"`
-	IPAddress                 string `xml:"ipAddress"`
-	Online                    string `xml:"online"`
-	Enabled                   string `xml:"enabled"`
+	ID                        int                          `xml:"id"`
+	Name                      string                       `xml:"name"`
+	DeviceName                string                       `xml:"deviceName"`
+	SourceInputPortDescriptor hikSourceInputPortDescriptor `xml:"sourceInputPortDescriptor"`
+	IPAddress                 string                       `xml:"ipAddress"`
+	Online                    string                       `xml:"online"`
+	Enabled                   string                       `xml:"enabled"`
 }
 
 type hikInputProxyChannelList struct {
@@ -1207,13 +1208,20 @@ type hikInputProxyChannelList struct {
 }
 
 type hikInputProxyChannel struct {
-	ID                        int    `xml:"id"`
-	Name                      string `xml:"name"`
-	DeviceName                string `xml:"deviceName"`
-	SourceInputPortDescriptor string `xml:"sourceInputPortDescriptor"`
-	IPAddress                 string `xml:"ipAddress"`
-	Online                    string `xml:"online"`
-	Enabled                   string `xml:"enabled"`
+	ID                        int                          `xml:"id"`
+	Name                      string                       `xml:"name"`
+	DeviceName                string                       `xml:"deviceName"`
+	SourceInputPortDescriptor hikSourceInputPortDescriptor `xml:"sourceInputPortDescriptor"`
+	IPAddress                 string                       `xml:"ipAddress"`
+	Online                    string                       `xml:"online"`
+	Enabled                   string                       `xml:"enabled"`
+}
+
+type hikSourceInputPortDescriptor struct {
+	Text         string `xml:",chardata"`
+	IPAddress    string `xml:"ipAddress"`
+	Online       string `xml:"online"`
+	SrcInputPort string `xml:"srcInputPort"`
 }
 
 func (s *PlatformService) fetchRecorderChannels(recorder entity.RecorderDevice) ([]recorderSyncChannel, error) {
@@ -1322,12 +1330,13 @@ func parseHikRecorderChannels(body []byte, kind string) ([]recorderSyncChannel, 
 				channelNo = index + 1
 			}
 			enabled := parseOptionalBool(item.Enabled, true)
-			online := parseOptionalBool(item.Online, enabled)
+			online := parseOptionalBool(defaultString(item.Online, item.SourceInputPortDescriptor.Online), enabled)
 			name, namePriority := resolveHikChannelDeviceName(
 				item.DeviceName,
 				item.Name,
-				item.SourceInputPortDescriptor,
 				item.IPAddress,
+				item.SourceInputPortDescriptor.IPAddress,
+				item.SourceInputPortDescriptor.Text,
 			)
 			channels = append(channels, recorderSyncChannel{
 				ChannelNo:    channelNo,
@@ -1350,12 +1359,13 @@ func parseHikRecorderChannels(body []byte, kind string) ([]recorderSyncChannel, 
 				channelNo = index + 1
 			}
 			enabled := parseOptionalBool(item.Enabled, true)
-			online := parseOptionalBool(item.Online, enabled)
+			online := parseOptionalBool(defaultString(item.Online, item.SourceInputPortDescriptor.Online), enabled)
 			name, namePriority := resolveHikChannelDeviceName(
 				item.DeviceName,
 				item.Name,
-				item.SourceInputPortDescriptor,
 				item.IPAddress,
+				item.SourceInputPortDescriptor.IPAddress,
+				item.SourceInputPortDescriptor.Text,
 			)
 			channels = append(channels, recorderSyncChannel{
 				ChannelNo:    channelNo,
@@ -1382,6 +1392,36 @@ func buildDefaultRecorderSyncChannels(count int) []recorderSyncChannel {
 		})
 	}
 	return channels
+}
+
+func completeRecorderSyncChannels(channels []recorderSyncChannel, expectedCount int) []recorderSyncChannel {
+	if expectedCount <= 0 || len(channels) >= expectedCount {
+		return channels
+	}
+	merged := make(map[int]recorderSyncChannel, expectedCount)
+	for _, channel := range channels {
+		if channel.ChannelNo <= 0 {
+			continue
+		}
+		if existing, ok := merged[channel.ChannelNo]; ok {
+			merged[channel.ChannelNo] = mergeRecorderSyncChannel(existing, channel)
+			continue
+		}
+		merged[channel.ChannelNo] = channel
+	}
+	for _, channel := range buildDefaultRecorderSyncChannels(expectedCount) {
+		if _, exists := merged[channel.ChannelNo]; !exists {
+			merged[channel.ChannelNo] = channel
+		}
+	}
+	completed := make([]recorderSyncChannel, 0, len(merged))
+	for _, channel := range merged {
+		completed = append(completed, channel)
+	}
+	sort.Slice(completed, func(i, j int) bool {
+		return completed[i].ChannelNo < completed[j].ChannelNo
+	})
+	return completed
 }
 
 func mergeRecorderSyncChannel(current, next recorderSyncChannel) recorderSyncChannel {
