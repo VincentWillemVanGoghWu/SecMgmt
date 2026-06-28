@@ -2203,7 +2203,35 @@ func (s *PlatformService) DeletePushConfig(id uint) error {
 }
 
 func (s *PlatformService) TestPushConfig(id uint) (map[string]any, error) {
+	var item entity.PushConfig
+	if err := s.db().First(&item, id).Error; err != nil {
+		return nil, err
+	}
 	now := time.Now()
+	if item.ProviderType == "wechat" {
+		result := deliverTestWechatPush(item, now)
+		logItem := entity.AlarmPushLog{
+			PushConfigID: &item.ID,
+			Channel:      "wechat",
+			ProviderType: "wechat",
+			Status:       result.Status,
+			ConfigName:   item.ConfigName,
+			TriggeredBy:  "test",
+			RetryCount:   0,
+			Message:      result.Message,
+			RequestBody:  result.RequestBody,
+			ResponseBody: result.ResponseBody,
+			ErrorMessage: result.ErrorMessage,
+			PushedAt:     now,
+		}
+		_ = s.db().Create(&logItem).Error
+		return map[string]any{
+			"success":  result.Status == "success",
+			"status":   result.Status,
+			"message":  result.Message,
+			"pushedAt": now.Format(time.RFC3339),
+		}, nil
+	}
 	return map[string]any{"success": true, "status": "success", "message": "测试推送成功", "pushedAt": now.Format(time.RFC3339)}, nil
 }
 

@@ -682,7 +682,9 @@ func (s *HikvisionAlarmBridgeService) persistMotionAggregate(window *motionAggre
 	if window == nil || window.Count <= 0 {
 		return nil
 	}
-	return s.repo.DB().Transaction(func(tx *gorm.DB) error {
+	var alarmToPush *entity.AlarmRecord
+	var pushChannels []string
+	err := s.repo.DB().Transaction(func(tx *gorm.DB) error {
 		payload := map[string]any{
 			"capabilityCode":  "motion_detect",
 			"eventType":       "motion_detect",
@@ -766,10 +768,22 @@ func (s *HikvisionAlarmBridgeService) persistMotionAggregate(window *motionAggre
 				if err := tx.Save(alarm).Error; err != nil {
 					return err
 				}
+				if window.Rule.PushEnabled && action == "created" {
+					alarmCopy := *alarm
+					alarmToPush = &alarmCopy
+					pushChannels = decodeJSONStringSlice(window.Rule.PushChannelsJSON)
+				}
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if alarmToPush != nil {
+		dispatchAlarmPushes(s.repo.DB(), s.logger, *alarmToPush, pushChannels, "auto")
+	}
+	return nil
 }
 
 func (s *HikvisionAlarmBridgeService) persistMotionEvent(
@@ -782,7 +796,9 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 	eventTime := time.Now()
 	unlockPersist := s.lockAlarmDedupKey(fmt.Sprintf("motion-persist:%s:%d", session.SessionKey, channelNo))
 	defer unlockPersist()
-	return s.repo.DB().Transaction(func(tx *gorm.DB) error {
+	var alarmToPush *entity.AlarmRecord
+	var pushChannels []string
+	err := s.repo.DB().Transaction(func(tx *gorm.DB) error {
 		var (
 			camera   *entity.CameraDevice
 			recorder *entity.RecorderDevice
@@ -917,12 +933,25 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 			if err := tx.Save(&smartEvent).Error; err != nil {
 				return err
 			}
-			if _, _, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, eventTime, channelNo, deviceIP, rule); err != nil {
+			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, eventTime, channelNo, deviceIP, rule)
+			if err != nil {
 				return err
+			}
+			if alarm != nil && rule.PushEnabled && action == "created" {
+				alarmCopy := *alarm
+				alarmToPush = &alarmCopy
+				pushChannels = decodeJSONStringSlice(rule.PushChannelsJSON)
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if alarmToPush != nil {
+		dispatchAlarmPushes(s.repo.DB(), s.logger, *alarmToPush, pushChannels, "auto")
+	}
+	return nil
 }
 
 func (s *HikvisionAlarmBridgeService) createOrMergeSmartEvent(tx *gorm.DB, smartEvent entity.SmartEvent) (entity.SmartEvent, error) {
