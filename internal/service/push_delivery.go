@@ -97,7 +97,7 @@ func deliverAlarmWechatPush(config entity.PushConfig, alarm entity.AlarmRecord, 
 func deliverTestWechatPush(config entity.PushConfig, now time.Time) pushDeliveryResult {
 	return deliverWechatTemplatePush(config, map[string]wechatTemplateField{
 		"time1":  {Value: now.Format("2006-01-02 15:04:05")},
-		"const2": {Value: "测试告警"},
+		"const2": {Value: formatWechatAlarmType("移动侦测")},
 		"thing5": {Value: trimWechatThingValue("测试通道")},
 		"const3": {Value: "中级告警"},
 	})
@@ -174,10 +174,10 @@ func deliverWechatTemplatePush(config entity.PushConfig, data map[string]wechatT
 	for _, payload := range requestPayloads {
 		response, err := sendWechatTemplateMessage(client, accessToken, payload)
 		if err != nil {
-			errorMessages = append(errorMessages, fmt.Sprintf("%s: %v", payload.ToUser, err))
+			errorMessages = append(errorMessages, fmt.Sprintf("%s: %s", payload.ToUser, humanizeWechatPushError(err.Error(), payload)))
 			responses = append(responses, map[string]any{
 				"touser": payload.ToUser,
-				"error":  err.Error(),
+				"error":  humanizeWechatPushError(err.Error(), payload),
 			})
 			continue
 		}
@@ -388,10 +388,41 @@ func resolveAlarmPushContext(db *gorm.DB, alarm entity.AlarmRecord) alarmPushCon
 func buildAlarmWechatTemplateData(alarm entity.AlarmRecord, ctx alarmPushContext) map[string]wechatTemplateField {
 	return map[string]wechatTemplateField{
 		"time1":  {Value: alarm.AlarmTime.Format("2006-01-02 15:04:05")},
-		"const2": {Value: alarm.AlarmType},
+		"const2": {Value: formatWechatAlarmType(alarm.AlarmType)},
 		"thing5": {Value: trimWechatThingValue(ctx.ChannelName)},
 		"const3": {Value: formatWechatAlarmLevel(alarm.AlarmLevel)},
 	}
+}
+
+func formatWechatAlarmType(alarmType string) string {
+	normalized := strings.ToLower(strings.TrimSpace(alarmType))
+	switch normalized {
+	case "", "unknown":
+		return "设备告警"
+	case "motion_detect", "移动侦测":
+		return "移动侦测告警"
+	case "helmet_missing", "未戴安全帽":
+		return "未戴安全帽告警"
+	case "intrusion", "区域入侵":
+		return "区域入侵告警"
+	case "smoke", "烟雾":
+		return "烟雾告警"
+	case "fire", "明火":
+		return "明火告警"
+	case "person_fall", "人员跌倒":
+		return "人员跌倒告警"
+	case "crowd", "人群聚集":
+		return "人群聚集告警"
+	}
+
+	value := strings.TrimSpace(alarmType)
+	if value == "" {
+		return "设备告警"
+	}
+	if strings.HasSuffix(value, "告警") {
+		return value
+	}
+	return value + "告警"
 }
 
 func formatWechatAlarmLevel(level string) string {
@@ -484,6 +515,20 @@ func buildPushFailureMessage(summary, detail string) string {
 		return summary
 	}
 	return summary + "： " + detail
+}
+
+func humanizeWechatPushError(detail string, payload wechatTemplateMessagePayload) string {
+	detail = strings.TrimSpace(detail)
+	switch {
+	case strings.Contains(detail, "data.const2.value invalid"):
+		return detail + fmt.Sprintf("；请确认微信模板“告警原因”枚举值已包含“%s”", payload.Data["const2"].Value)
+	case strings.Contains(detail, "data.const3.value invalid"):
+		return detail + fmt.Sprintf("；请确认微信模板“告警系统”枚举值已包含“%s”", payload.Data["const3"].Value)
+	case strings.Contains(detail, "47003"):
+		return detail + "；这通常表示模板字段值与微信模板类型或枚举配置不匹配"
+	default:
+		return detail
+	}
 }
 
 func compactPushErrorDetail(detail string) string {
