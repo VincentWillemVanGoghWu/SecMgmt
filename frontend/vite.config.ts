@@ -208,20 +208,69 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (!id.includes('node_modules')) {
+          const normalizedId = id.replace(/\\/g, '/')
+          if (!normalizedId.includes('node_modules')) {
             return
           }
 
-          if (id.includes('element-plus') || id.includes('@element-plus/icons-vue')) {
-            return 'element-plus'
+          if (normalizedId.includes('@element-plus/icons-vue')) {
+            return 'element-plus-icons'
           }
-          if (id.includes('echarts')) {
-            return 'echarts'
+          if (normalizedId.includes('element-plus/theme-chalk')) {
+            return 'element-plus-style'
           }
-          if (id.includes('vue')) {
+          if (normalizedId.includes('element-plus/es/components/')) {
+            if (/element-plus\/es\/components\/(table|table-column|pagination|scrollbar|virtual-list)\//.test(normalizedId)) {
+              return 'element-plus-table'
+            }
+            if (/element-plus\/es\/components\/(form|form-item|input|input-number|select|option|option-group|date-picker|time-picker|time-select|checkbox|checkbox-group|checkbox-button|radio|radio-group|radio-button|switch|slider|upload)\//.test(normalizedId)) {
+              return 'element-plus-form'
+            }
+            if (/element-plus\/es\/components\/(dialog|drawer|message|message-box|notification|popper|popover|tooltip|overlay|focus-trap)\//.test(normalizedId)) {
+              return 'element-plus-overlay'
+            }
+            if (/element-plus\/es\/components\/(button|button-group|icon|tag|empty|card|tabs|tab-pane|menu|menu-item|sub-menu|dropdown|dropdown-menu|dropdown-item)\//.test(normalizedId)) {
+              return 'element-plus-basic'
+            }
+            return 'element-plus-components'
+          }
+          if (normalizedId.includes('element-plus')) {
+            return 'element-plus-core'
+          }
+          if (normalizedId.includes('zrender')) {
+            return 'echarts-zrender'
+          }
+          if (normalizedId.includes('echarts/lib/chart') || normalizedId.includes('echarts/charts')) {
+            return 'echarts-charts'
+          }
+          if (normalizedId.includes('echarts/lib/component') || normalizedId.includes('echarts/components')) {
+            return 'echarts-components'
+          }
+          if (normalizedId.includes('echarts/lib/renderer') || normalizedId.includes('echarts/renderers')) {
+            return 'echarts-renderers'
+          }
+          if (normalizedId.includes('echarts/lib/coord') || normalizedId.includes('echarts/lib/scale')) {
+            return 'echarts-coord'
+          }
+          if (normalizedId.includes('echarts/lib/data') || normalizedId.includes('echarts/lib/model')) {
+            return 'echarts-data'
+          }
+          if (normalizedId.includes('echarts/lib/util') || normalizedId.includes('echarts/lib/core')) {
+            return 'echarts-core'
+          }
+          if (normalizedId.includes('echarts')) {
+            return 'echarts-core'
+          }
+          if (normalizedId.includes('hls.js')) {
+            return 'video-hls'
+          }
+          if (normalizedId.includes('hikvideoctrl')) {
+            return 'video-hik-webcontrol'
+          }
+          if (normalizedId.includes('vue')) {
             return 'vue-vendor'
           }
-          if (id.includes('axios')) {
+          if (normalizedId.includes('axios')) {
             return 'http-vendor'
           }
         },

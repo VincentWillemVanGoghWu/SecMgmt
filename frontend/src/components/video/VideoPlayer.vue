@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import Hls from "hls.js"
-import { ElMessageBox } from "element-plus"
-import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from "vue"
+import type Hls from "hls.js"
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from "vue"
 
 import type {
   ConnectionMode,
@@ -11,7 +10,10 @@ import type {
   StreamProfile,
   StreamType,
 } from "../../types/video"
-import HikWebControlPlayer from "./HikWebControlPlayer.vue"
+
+type HlsConstructor = typeof import("hls.js")["default"]
+
+const HikWebControlPlayer = defineAsyncComponent(() => import("./HikWebControlPlayer.vue"))
 
 const emit = defineEmits<{
   seek: [offsetSeconds: number]
@@ -99,10 +101,12 @@ const timelinePreviewSeconds = ref(0)
 const timelinePreviewLeft = ref("0%")
 const isTimelinePanning = ref(false)
 let hls: Hls | null = null
+let hlsConstructorPromise: Promise<HlsConstructor> | null = null
 let errorDialogVisible = false
 let lastDialogMessage = ""
 let suppressMediaErrors = false
 let sourceChangeTimestamp = 0
+let attachPlayerSourceToken = 0
 let appliedInitialSeekSignature = ""
 let hlsNetworkRecoveryUntil = 0
 let playAttemptId = 0
@@ -155,6 +159,11 @@ const destroyHls = () => {
     hls.destroy()
     hls = null
   }
+}
+
+const loadHlsConstructor = async () => {
+  hlsConstructorPromise ??= import("hls.js/light").then((module) => module.default as HlsConstructor)
+  return await hlsConstructorPromise
 }
 
 const suppressTeardownErrorsBriefly = () => {
@@ -220,6 +229,7 @@ const shouldIgnoreAutoplayError = (error: unknown, requestedUrl: string | null |
 }
 
 const detachPlayerSource = () => {
+  attachPlayerSourceToken += 1
   suppressTeardownErrorsBriefly()
   markSourceChange()
   destroyHls()
@@ -241,12 +251,16 @@ const showPlayerErrorDialog = (message: string) => {
   }
   errorDialogVisible = true
   lastDialogMessage = message
-  void ElMessageBox.alert(message, "预览失败", {
-    type: "error",
-    confirmButtonText: "确定",
-  }).finally(() => {
-    errorDialogVisible = false
-  })
+  void import("element-plus")
+    .then(({ ElMessageBox }) =>
+      ElMessageBox.alert(message, "预览失败", {
+        type: "error",
+        confirmButtonText: "确定",
+      }),
+    )
+    .finally(() => {
+      errorDialogVisible = false
+    })
 }
 
 const applyPlaybackState = () => {
@@ -565,7 +579,8 @@ const shouldShowPlaybackSeekBar = computed(() =>
   props.showSeekBar && seekBarMax.value > 0 && renderMode.value !== "mock",
 )
 
-const attachPlayerSource = () => {
+const attachPlayerSource = async () => {
+  const token = ++attachPlayerSourceToken
   const element = videoRef.value
   if (isWebControlMode.value || !element || !props.playUrl || !props.isPlaying || renderMode.value === "mock") {
     detachPlayerSource()
@@ -595,8 +610,27 @@ const attachPlayerSource = () => {
   const isHlsSource = props.playUrl.includes(".m3u8") || props.streamType === "hls"
 
   if (isHlsSource) {
-    if (Hls.isSupported()) {
-      const hlsInstance = new Hls({
+    if (element.canPlayType("application/vnd.apple.mpegurl")) {
+      element.src = props.playUrl
+      applyPlaybackState()
+      return
+    }
+
+    let HlsConstructor: HlsConstructor
+    try {
+      HlsConstructor = await loadHlsConstructor()
+    } catch {
+      playerError.value = "HLS 播放器加载失败，请刷新页面后重试。"
+      playerState.value = "idle"
+      showPlayerErrorDialog(playerError.value)
+      return
+    }
+    if (token !== attachPlayerSourceToken || element !== videoRef.value || !props.playUrl || !props.isPlaying) {
+      return
+    }
+
+    if (HlsConstructor.isSupported()) {
+      const hlsInstance = new HlsConstructor({
         manifestLoadingMaxRetry: 8,
         manifestLoadingRetryDelay: 500,
         levelLoadingMaxRetry: 8,
@@ -607,14 +641,14 @@ const attachPlayerSource = () => {
       hls = hlsInstance
       hlsInstance.loadSource(props.playUrl)
       hlsInstance.attachMedia(element)
-      hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+      hlsInstance.on(HlsConstructor.Events.MANIFEST_PARSED, () => {
         if (hlsInstance !== hls) {
           return
         }
         playerState.value = "ready"
         applyPlaybackState()
       })
-      hlsInstance.on(Hls.Events.ERROR, (_, data) => {
+      hlsInstance.on(HlsConstructor.Events.ERROR, (_, data) => {
         if (hlsInstance !== hls) {
           return
         }
@@ -657,12 +691,6 @@ const attachPlayerSource = () => {
       return
     }
 
-    if (element.canPlayType("application/vnd.apple.mpegurl")) {
-      element.src = props.playUrl
-      applyPlaybackState()
-      return
-    }
-
     playerError.value = "当前浏览器既不支持原生 HLS，也无法启用 hls.js。"
     playerState.value = "idle"
     showPlayerErrorDialog(playerError.value)
@@ -678,7 +706,11 @@ const scheduleAttachPlayerSource = () => {
     playerError.value = ""
     playerState.value = "idle"
     resetPlaybackProgress()
-    attachPlayerSource()
+    void attachPlayerSource().catch(() => {
+      playerError.value = "播放器初始化失败，请刷新页面后重试。"
+      playerState.value = "idle"
+      showPlayerErrorDialog(playerError.value)
+    })
   })
 }
 
