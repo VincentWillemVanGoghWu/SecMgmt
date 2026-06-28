@@ -7,7 +7,7 @@ PROJECT_NAME="secmgmt_go"
 SERVICE_NAME="secmgmt-go"
 COMPOSE_PROJECT_NAME="secmgmt-go"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
-INSTALL_DIR="${INSTALL_DIR:-/opt/secmgmt_go}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/secmgmt}"
 RUNTIME_DIR="${INSTALL_DIR}/runtime"
 CACHE_DIR="${INSTALL_DIR}/.deploy-cache"
 GENERATED_DIR="${RUNTIME_DIR}/generated"
@@ -67,7 +67,7 @@ Usage:
   sudo ./deploy_ubuntu.sh [options]
 
 Options:
-  --install-dir <path>         Runtime data dir, default: /opt/secmgmt_go
+  --install-dir <path>         Runtime data dir, default: /opt/secmgmt
   --backend-port <port>        Host port mapped to backend, default: 8000
   --frontend-port <port>       Host port mapped to frontend nginx, default: 80
   --server-name <name>         Nginx server_name, default: _
