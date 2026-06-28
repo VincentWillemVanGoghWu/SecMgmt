@@ -3,6 +3,7 @@ import { loadWebVideoCtrl } from "hikvideoctrl"
 import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from "vue"
 
 import type { LiveWebControlConfig, PlaybackTimelineSpan } from "../../types/video"
+import { ensureHikProxyRoutingInstalled } from "./hikProxyRouting"
 
 type HikSdkXmlResponse = { responseXML?: Document | null; responseText?: string }
 type HikSdkXml = Document | string | HikSdkXmlResponse | null | undefined
@@ -666,6 +667,7 @@ const loadScriptOnce = async (scriptUrl: string) => {
 }
 
 const getSdk = async () => {
+  ensureHikProxyRoutingInstalled()
   for (const dependencyUrl of sdkDependencyUrls) {
     await loadScriptOnce(dependencyUrl)
   }
