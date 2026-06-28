@@ -35,6 +35,91 @@ export interface SmartProviderTestResult {
   checkedAt: string
 }
 
+export interface SmartBindingTestDeviceResult {
+  sourceType: string
+  sourceId: number
+  sourceName: string
+  sourcePath: string
+  success: boolean
+  message: string
+  detail?: Record<string, unknown> | null
+}
+
+export interface SmartBindingTestProviderResult {
+  id: number
+  providerCode: string
+  providerName: string
+  success: boolean
+  message: string
+}
+
+export interface SmartBindingRuntimeResult {
+  supported: boolean
+  success: boolean
+  message: string
+  bindingIncluded?: boolean
+  running?: boolean
+  sessionFound?: boolean
+  sessionKey?: string | null
+  deviceType?: string | null
+  deviceId?: number | null
+  deviceIp?: string | null
+  lastError?: string | null
+  session?: Record<string, unknown> | null
+  status?: Record<string, unknown> | null
+}
+
+export interface SmartBindingRuleSummary {
+  success: boolean
+  message: string
+  ruleCount: number
+  enabledRuleCount: number
+  alarmEnabledRuleCount: number
+  directAlarmRuleCount: number
+  sendToAiRuleCount: number
+}
+
+export interface SmartBindingLatestEvent {
+  found: boolean
+  message: string
+  id?: number
+  code?: string
+  time?: string
+  eventType?: string
+  eventLevel?: string
+  sourceStage?: string
+  status?: string
+  ageSeconds?: number
+}
+
+export interface SmartBindingLatestAlarm {
+  found: boolean
+  message: string
+  id?: number
+  code?: string
+  time?: string
+  alarmType?: string
+  alarmLevel?: string
+  status?: string
+  ageSeconds?: number
+}
+
+export interface SmartBindingTestResult {
+  success: boolean
+  message: string
+  checkedAt: string
+  bindingEnabled: boolean
+  providerEnabled: boolean
+  capabilityCode: string
+  capabilityName: string
+  provider: SmartBindingTestProviderResult
+  device: SmartBindingTestDeviceResult
+  runtime: SmartBindingRuntimeResult
+  rules: SmartBindingRuleSummary
+  latestEvent: SmartBindingLatestEvent
+  latestAlarm: SmartBindingLatestAlarm
+}
+
 export interface SmartCapabilityRecord {
   id: number
   capabilityCode: string

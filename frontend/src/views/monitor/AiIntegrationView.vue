@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, View } from '@element-plus/icons-vue'
 
@@ -22,6 +22,7 @@ import {
   listSmartEventsApi,
   listSmartProvidersApi,
   retrySmartAiTaskApi,
+  testSmartBindingApi,
   testSmartProviderApi,
   updateSmartBindingApi,
   updateSmartBindingRuleApi,
@@ -35,6 +36,7 @@ import type {
   SmartBindingDetailRecord,
   SmartBindingRecord,
   SmartBindingRuleRecord,
+  SmartBindingTestResult,
   SmartCapabilityRecord,
   SmartEventDetailRecord,
   SmartEventPageRecord,
@@ -49,6 +51,7 @@ const providerSubmitting = ref(false)
 const bindingSubmitting = ref(false)
 const ruleSubmitting = ref(false)
 const providerTestingId = ref<number | null>(null)
+const bindingTestingId = ref<number | null>(null)
 const retryingTaskId = ref<number | null>(null)
 
 const activeTab = ref<'providers' | 'bindings' | 'events'>('providers')
@@ -527,6 +530,95 @@ const handleTestProvider = async (record: SmartProviderRecord) => {
   }
 }
 
+const buildBindingTestMessage = (result: SmartBindingTestResult) => {
+  const segments = [result.message]
+  if (result.device?.message) {
+    segments.push(`设备：${result.device.message}`)
+  }
+  if (result.provider?.message) {
+    segments.push(`接口：${result.provider.message}`)
+  }
+  segments.push(formatDateTime(result.checkedAt))
+  return segments.filter(Boolean).join(' | ')
+}
+
+const formatElapsed = (seconds?: number) => {
+  if (seconds == null || Number.isNaN(seconds)) {
+    return '-'
+  }
+  if (seconds < 60) {
+    return `${seconds} 秒前`
+  }
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) {
+    return `${minutes} 分钟前`
+  }
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    return `${hours} 小时前`
+  }
+  const days = Math.floor(hours / 24)
+  return `${days} 天前`
+}
+
+const buildBindingSelfCheckMessage = (result: SmartBindingTestResult) => {
+  const lines = [
+    `结论：${result.message}`,
+    `设备：${result.device.success ? '正常' : '异常'}，${result.device.message}`,
+    `接口：${result.provider.success ? '正常' : '异常'}，${result.provider.message}`,
+    `运行态：${result.runtime.success ? '正常' : '异常'}，${result.runtime.message}`,
+    `规则：${result.rules.message}；告警规则 ${result.rules.alarmEnabledRuleCount} 条，直接告警 ${result.rules.directAlarmRuleCount} 条`,
+  ]
+  if (result.latestEvent.found) {
+    lines.push(
+      `最近事件：${result.latestEvent.code}，${result.latestEvent.eventType}，${formatDateTime(result.latestEvent.time)}，${formatElapsed(result.latestEvent.ageSeconds)}`,
+    )
+  } else {
+    lines.push(`最近事件：${result.latestEvent.message}`)
+  }
+  if (result.latestAlarm.found) {
+    lines.push(
+      `最近告警：${result.latestAlarm.code}，${result.latestAlarm.alarmType}，${formatDateTime(result.latestAlarm.time)}，${formatElapsed(result.latestAlarm.ageSeconds)}`,
+    )
+  } else {
+    lines.push(`最近告警：${result.latestAlarm.message}`)
+  }
+  if (result.runtime.supported) {
+    lines.push(
+      `Bridge：${result.runtime.running ? '在线' : '离线'}，会话${result.runtime.sessionFound ? '已命中' : '未命中'}${result.runtime.sessionKey ? ` (${result.runtime.sessionKey})` : ''}`,
+    )
+  }
+  lines.push(`检查时间：${formatDateTime(result.checkedAt)}`)
+  return lines.join('\n')
+}
+
+const handleTestBinding = async (record: SmartBindingRecord) => {
+  bindingTestingId.value = record.id
+  try {
+    const result = await testSmartBindingApi(record.id)
+    ElMessage[result.success ? 'success' : 'warning'](buildBindingTestMessage(result))
+    await ElMessageBox.alert(
+      h(
+        'div',
+        {
+          style: {
+            whiteSpace: 'pre-wrap',
+            lineHeight: '1.7',
+            wordBreak: 'break-word',
+          },
+        },
+        buildBindingSelfCheckMessage(result),
+      ),
+      '绑定链路自检',
+      { confirmButtonText: '知道了' },
+    )
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '绑定自检失败'))
+  } finally {
+    bindingTestingId.value = null
+  }
+}
+
 const openCreateBindingDialog = async () => {
   await ensureFormOptionsLoaded()
   resetBindingForm()
@@ -898,6 +990,13 @@ onMounted(async () => {
                 <td>
                   <div class="table-actions">
                     <button class="app-button app-button--primary smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button" @click="openBindingDetail(item)">详情</button>
+                    <button
+                      class="app-button app-button--secondary smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button"
+                      :disabled="bindingTestingId === item.id"
+                      @click="handleTestBinding(item)"
+                    >
+                      {{ bindingTestingId === item.id ? '自检中...' : '自检' }}
+                    </button>
                     <button class="app-button app-button--secondary smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button" @click="openEditBindingDialog(item)">编辑</button>
                     <button class="app-button app-button--danger smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button" @click="handleDeleteBinding(item)">
                       删除
@@ -1732,7 +1831,7 @@ onMounted(async () => {
 }
 
 .smart-interface-page__binding-col-actions {
-  width: 168px;
+  width: 220px;
 }
 
 .smart-interface-page__event-col-code {

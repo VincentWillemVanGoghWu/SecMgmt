@@ -1357,6 +1357,19 @@ func (h *PlatformHandler) CreateSmartBinding(c *gin.Context) {
 	response.OK(c, data)
 }
 
+func (h *PlatformHandler) TestSmartBinding(c *gin.Context) {
+	id, ok := pathUint(c, "id")
+	if !ok {
+		return
+	}
+	data, err := h.platformService.TestSmartBinding(id)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
 func (h *PlatformHandler) UpdateSmartBinding(c *gin.Context) {
 	id, ok := pathUint(c, "id")
 	if !ok {

@@ -8,6 +8,7 @@ import type {
   SmartBindingRuleRecord,
   SmartBindingRuleSubmitPayload,
   SmartBindingSubmitPayload,
+  SmartBindingTestResult,
   SmartCapabilityRecord,
   SmartEventDetailRecord,
   SmartEventIngestResponse,
@@ -55,6 +56,9 @@ export const deleteSmartBindingApi = async (id: number): Promise<void> => {
 
 export const getSmartBindingDetailApi = async (id: number): Promise<SmartBindingDetailRecord> =>
   unwrap(await http.get<ApiResponse<SmartBindingDetailRecord>>(`/smart/bindings/${id}`))
+
+export const testSmartBindingApi = async (id: number): Promise<SmartBindingTestResult> =>
+  unwrap(await http.post<ApiResponse<SmartBindingTestResult>>(`/smart/bindings/${id}/test`))
 
 export const createSmartBindingRuleApi = async (
   bindingId: number,

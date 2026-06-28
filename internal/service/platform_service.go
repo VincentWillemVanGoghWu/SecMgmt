@@ -52,6 +52,40 @@ func (s *PlatformService) SetHikvisionAlarmBridge(bridge *HikvisionAlarmBridgeSe
 	s.hikvisionBridge = bridge
 }
 
+func (s *PlatformService) tryReloadHikvisionBridge(trigger string) {
+	if s.hikvisionBridge == nil {
+		return
+	}
+	if err := s.hikvisionBridge.Start(); err != nil && s.logger != nil {
+		s.logger.Warn("reload hikvision alarm bridge",
+			zap.String("trigger", trigger),
+			zap.Error(err),
+		)
+	}
+}
+
+func (s *PlatformService) reloadHikvisionBridgeForProvider(providerCode, trigger string) {
+	if providerCode != "hikvision-sdk" {
+		return
+	}
+	s.tryReloadHikvisionBridge(trigger)
+}
+
+func (s *PlatformService) reloadHikvisionBridgeForBinding(providerCode, capabilityCode, trigger string) {
+	if providerCode != "hikvision-sdk" || capabilityCode != "motion_detect" {
+		return
+	}
+	s.tryReloadHikvisionBridge(trigger)
+}
+
+func shouldReloadHikvisionProvider(providerCode string) bool {
+	return providerCode == "hikvision-sdk"
+}
+
+func shouldReloadHikvisionBinding(providerCode, capabilityCode string) bool {
+	return providerCode == "hikvision-sdk" && capabilityCode == "motion_detect"
+}
+
 type UserPayload struct {
 	Username string `json:"username"`
 	RealName string `json:"realName"`
@@ -2248,6 +2282,7 @@ func (s *PlatformService) CreateSmartProvider(payload SmartProviderPayload) (map
 	if err := s.db().Create(&item).Error; err != nil {
 		return nil, err
 	}
+	s.reloadHikvisionBridgeForProvider(item.ProviderCode, "create-smart-provider")
 	return s.smartProviderMap(item), nil
 }
 
@@ -2256,6 +2291,7 @@ func (s *PlatformService) UpdateSmartProvider(id uint, payload SmartProviderPayl
 	if err := s.db().First(&item, id).Error; err != nil {
 		return nil, err
 	}
+	previousProviderCode := item.ProviderCode
 	item.ProviderCode = payload.ProviderCode
 	item.ProviderName = payload.ProviderName
 	item.ProviderType = payload.ProviderType
@@ -2270,6 +2306,14 @@ func (s *PlatformService) UpdateSmartProvider(id uint, payload SmartProviderPayl
 	item.Remark = valueOrEmpty(payload.Remark)
 	if err := s.db().Save(&item).Error; err != nil {
 		return nil, err
+	}
+	switch {
+	case shouldReloadHikvisionProvider(previousProviderCode) && shouldReloadHikvisionProvider(item.ProviderCode):
+		s.reloadHikvisionBridgeForProvider(item.ProviderCode, "update-smart-provider")
+	case shouldReloadHikvisionProvider(previousProviderCode):
+		s.reloadHikvisionBridgeForProvider(previousProviderCode, "update-smart-provider-old")
+	case shouldReloadHikvisionProvider(item.ProviderCode):
+		s.reloadHikvisionBridgeForProvider(item.ProviderCode, "update-smart-provider-new")
 	}
 	return s.smartProviderMap(item), nil
 }
@@ -2321,6 +2365,117 @@ func (s *PlatformService) TestSmartProvider(id uint) (map[string]any, error) {
 	return map[string]any{"success": true, "message": "Provider test succeeded", "checkedAt": checkedAt}, nil
 }
 
+func (s *PlatformService) TestSmartBinding(id uint) (map[string]any, error) {
+	var binding entity.SmartDeviceBinding
+	if err := s.db().First(&binding, id).Error; err != nil {
+		return nil, err
+	}
+
+	var provider entity.SmartInterfaceProvider
+	if err := s.db().First(&provider, binding.ProviderID).Error; err != nil {
+		return nil, err
+	}
+
+	var capability entity.SmartInterfaceCapability
+	if err := s.db().First(&capability, binding.CapabilityID).Error; err != nil {
+		return nil, err
+	}
+
+	sourceName, sourcePath := s.resolveSourceName(binding.SourceType, binding.SourceID)
+	checkedAt := time.Now().Format(time.RFC3339)
+
+	providerResult, err := s.TestSmartProvider(provider.ID)
+	if err != nil {
+		return nil, err
+	}
+	providerSuccess, _ := providerResult["success"].(bool)
+	providerMessage := fmt.Sprint(providerResult["message"])
+
+	deviceResult, err := s.testSmartBindingDevice(binding)
+	if err != nil {
+		return nil, err
+	}
+	deviceSuccess, _ := deviceResult["success"].(bool)
+	deviceMessage := fmt.Sprint(deviceResult["message"])
+	runtimeResult := s.inspectSmartBindingRuntime(binding, provider, capability)
+	runtimeSuccess, _ := runtimeResult["success"].(bool)
+	ruleSummary := s.summarizeSmartBindingRules(binding.ID)
+	ruleSuccess, _ := ruleSummary["success"].(bool)
+	latestEvent := s.latestSmartBindingEvent(binding.ID)
+	latestAlarm := s.latestSmartBindingAlarm(binding.ID)
+	latestEventFound, _ := latestEvent["found"].(bool)
+	latestAlarmFound, _ := latestAlarm["found"].(bool)
+	alarmEnabledRuleCount, _ := ruleSummary["alarmEnabledRuleCount"].(int)
+
+	issues := make([]string, 0, 6)
+	if !binding.Enabled {
+		issues = append(issues, "绑定已停用")
+	}
+	if !provider.Enabled {
+		issues = append(issues, "接口提供方已停用")
+	}
+	if !capability.Enabled {
+		issues = append(issues, "能力已停用")
+	}
+	if !deviceSuccess {
+		issues = append(issues, "绑定设备检测异常")
+	}
+	if !providerSuccess {
+		issues = append(issues, "接口检测异常")
+	}
+	if !runtimeSuccess {
+		issues = append(issues, "运行链路未就绪")
+	}
+	if !ruleSuccess {
+		issues = append(issues, "未配置启用规则")
+	}
+
+	observation := make([]string, 0, 2)
+	if !latestEventFound {
+		observation = append(observation, "暂未发现历史事件")
+	}
+	if alarmEnabledRuleCount > 0 && !latestAlarmFound {
+		observation = append(observation, "暂未发现历史告警")
+	}
+
+	message := fmt.Sprintf("绑定自检通过：%s 与 %s 链路正常", sourceName, provider.ProviderName)
+	if len(issues) > 0 {
+		message = "绑定自检未通过：" + strings.Join(issues, "，")
+	} else if len(observation) > 0 {
+		message = message + "，" + strings.Join(observation, "，")
+	}
+
+	return map[string]any{
+		"success":         len(issues) == 0,
+		"message":         message,
+		"checkedAt":       checkedAt,
+		"bindingEnabled":  binding.Enabled,
+		"providerEnabled": provider.Enabled,
+		"capabilityCode":  capability.CapabilityCode,
+		"capabilityName":  capability.CapabilityName,
+		"provider": map[string]any{
+			"id":           provider.ID,
+			"providerCode": provider.ProviderCode,
+			"providerName": provider.ProviderName,
+			"success":      providerSuccess,
+			"message":      providerMessage,
+		},
+		"device": map[string]any{
+			"sourceType": binding.SourceType,
+			"sourceId":   binding.SourceID,
+			"sourceName": sourceName,
+			"sourcePath": sourcePath,
+			"success":    deviceSuccess,
+			"message":    deviceMessage,
+			"detail":     deviceResult,
+		},
+		"runtime":     runtimeResult,
+		"rules":       ruleSummary,
+		"latestEvent": latestEvent,
+		"latestAlarm": latestAlarm,
+	}, nil
+}
+
 func (s *PlatformService) ListSmartCapabilities() ([]map[string]any, error) {
 	var items []entity.SmartInterfaceCapability
 	if err := s.db().Order("id DESC").Find(&items).Error; err != nil {
@@ -2343,6 +2498,253 @@ func (s *PlatformService) ListSmartCapabilities() ([]map[string]any, error) {
 		})
 	}
 	return result, nil
+}
+
+func (s *PlatformService) testSmartBindingDevice(binding entity.SmartDeviceBinding) (map[string]any, error) {
+	sourceName, sourcePath := s.resolveSourceName(binding.SourceType, binding.SourceID)
+
+	switch binding.SourceType {
+	case "camera":
+		result, err := s.TestCameraConnection(binding.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"targetDeviceType": "camera",
+			"targetDeviceId":   binding.SourceID,
+			"sourceName":       sourceName,
+			"sourcePath":       sourcePath,
+			"success":          result["success"],
+			"status":           result["status"],
+			"message":          result["message"],
+		}, nil
+	case "recorder":
+		result, err := s.TestRecorderConnection(binding.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"targetDeviceType": "recorder",
+			"targetDeviceId":   binding.SourceID,
+			"sourceName":       sourceName,
+			"sourcePath":       sourcePath,
+			"success":          result["success"],
+			"status":           result["status"],
+			"message":          result["message"],
+		}, nil
+	case "channel":
+		var channel entity.RecorderChannel
+		if err := s.db().First(&channel, binding.SourceID).Error; err != nil {
+			return nil, err
+		}
+		result, err := s.TestRecorderConnection(channel.RecorderID)
+		if err != nil {
+			return nil, err
+		}
+		recorderSuccess, _ := result["success"].(bool)
+		success := recorderSuccess && channel.Enabled
+		message := "通道所属录像机连接测试成功"
+		if !channel.Enabled {
+			message = "通道已停用"
+		} else if text := fmt.Sprint(result["message"]); text != "" {
+			message = text
+		}
+		return map[string]any{
+			"targetDeviceType": "recorder",
+			"targetDeviceId":   channel.RecorderID,
+			"channelId":        channel.ID,
+			"channelNo":        channel.ChannelNo,
+			"channelEnabled":   channel.Enabled,
+			"sourceName":       sourceName,
+			"sourcePath":       sourcePath,
+			"success":          success,
+			"status":           result["status"],
+			"message":          message,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported binding source type %q", binding.SourceType)
+	}
+}
+
+func (s *PlatformService) inspectSmartBindingRuntime(binding entity.SmartDeviceBinding, provider entity.SmartInterfaceProvider, capability entity.SmartInterfaceCapability) map[string]any {
+	if provider.ProviderCode != "hikvision-sdk" || capability.CapabilityCode != "motion_detect" {
+		return map[string]any{
+			"supported": false,
+			"success":   true,
+			"message":   "当前绑定无需执行 SDK bridge 运行态检查",
+		}
+	}
+
+	status := map[string]any{
+		"running":             false,
+		"sessionCount":        0,
+		"bindingCount":        0,
+		"skippedBindingCount": 0,
+		"mergedBindingCount":  0,
+		"lastError":           "hikvision bridge is not attached",
+		"sessions":            []map[string]any{},
+	}
+	if s.hikvisionBridge != nil {
+		status = s.hikvisionBridge.RuntimeStatus()
+	}
+
+	running, _ := status["running"].(bool)
+	bindingIncluded := binding.Enabled && provider.Enabled && capability.Enabled
+	result := map[string]any{
+		"supported":       true,
+		"success":         false,
+		"message":         "Hikvision SDK bridge is not attached",
+		"bindingIncluded": bindingIncluded,
+		"running":         running,
+		"sessionFound":    false,
+		"sessionKey":      nil,
+		"deviceType":      nil,
+		"deviceId":        nil,
+		"deviceIp":        nil,
+		"lastError":       fmt.Sprint(status["lastError"]),
+		"status":          status,
+	}
+	if s.hikvisionBridge == nil {
+		return result
+	}
+	target, ok, err := s.hikvisionBridge.bindingToTarget(binding)
+	if err != nil {
+		result["message"] = fmt.Sprintf("bridge 目标解析失败：%v", err)
+		return result
+	}
+	if !ok {
+		result["message"] = "当前绑定未能解析为有效的 bridge 监听目标"
+		return result
+	}
+
+	result["sessionKey"] = target.SessionKey
+	result["deviceType"] = target.DeviceType
+	result["deviceId"] = target.DeviceID
+	result["deviceIp"] = target.DeviceIP
+
+	session, found := findBridgeSession(status["sessions"], target.SessionKey)
+	result["sessionFound"] = found
+	if found {
+		result["session"] = session
+	}
+	switch {
+	case !bindingIncluded:
+		result["message"] = "当前绑定未处于可监听状态"
+	case !running:
+		result["message"] = "Hikvision SDK bridge 未运行"
+	case !found:
+		result["message"] = fmt.Sprintf("bridge 已运行，但未命中当前绑定会话 %s", target.SessionKey)
+	default:
+		result["success"] = true
+		result["message"] = fmt.Sprintf("bridge 已命中当前绑定会话 %s", target.SessionKey)
+	}
+	return result
+}
+
+func (s *PlatformService) summarizeSmartBindingRules(bindingID uint) map[string]any {
+	var rules []entity.SmartBindingRule
+	_ = s.db().Where("binding_id = ?", bindingID).Find(&rules).Error
+
+	enabledRuleCount := 0
+	alarmEnabledRuleCount := 0
+	directAlarmRuleCount := 0
+	sendToAIRuleCount := 0
+	for _, item := range rules {
+		if item.Enabled {
+			enabledRuleCount++
+		}
+		if item.Enabled && item.AlarmEnabled {
+			alarmEnabledRuleCount++
+		}
+		if item.Enabled && item.AlarmEnabled && item.GenerateAlarmDirectly {
+			directAlarmRuleCount++
+		}
+		if item.Enabled && item.SendToAI {
+			sendToAIRuleCount++
+		}
+	}
+
+	message := fmt.Sprintf("共 %d 条规则，已启用 %d 条", len(rules), enabledRuleCount)
+	if enabledRuleCount == 0 {
+		message = "未配置启用规则"
+	}
+	return map[string]any{
+		"success":               enabledRuleCount > 0,
+		"message":               message,
+		"ruleCount":             len(rules),
+		"enabledRuleCount":      enabledRuleCount,
+		"alarmEnabledRuleCount": alarmEnabledRuleCount,
+		"directAlarmRuleCount":  directAlarmRuleCount,
+		"sendToAiRuleCount":     sendToAIRuleCount,
+	}
+}
+
+func (s *PlatformService) latestSmartBindingEvent(bindingID uint) map[string]any {
+	var item entity.SmartEvent
+	if err := s.db().Where("binding_id = ?", bindingID).Order("event_time DESC").First(&item).Error; err != nil {
+		return map[string]any{
+			"found":   false,
+			"message": "暂无历史事件",
+		}
+	}
+	return map[string]any{
+		"found":       true,
+		"id":          item.ID,
+		"code":        item.EventCode,
+		"time":        item.EventTime.Format(time.RFC3339),
+		"eventType":   item.EventType,
+		"eventLevel":  item.EventLevel,
+		"sourceStage": item.SourceStage,
+		"status":      item.Status,
+		"ageSeconds":  ageSeconds(item.EventTime),
+		"message":     fmt.Sprintf("最近事件 %s", item.EventCode),
+	}
+}
+
+func (s *PlatformService) latestSmartBindingAlarm(bindingID uint) map[string]any {
+	var item entity.AlarmRecord
+	err := s.db().
+		Table("alarm_record AS a").
+		Select("a.*").
+		Joins("JOIN smart_event e ON e.id = a.smart_event_id").
+		Where("e.binding_id = ?", bindingID).
+		Order("a.alarm_time DESC").
+		First(&item).Error
+	if err != nil {
+		return map[string]any{
+			"found":   false,
+			"message": "暂无历史告警",
+		}
+	}
+	return map[string]any{
+		"found":      true,
+		"id":         item.ID,
+		"code":       item.AlarmNo,
+		"time":       item.AlarmTime.Format(time.RFC3339),
+		"alarmType":  item.AlarmType,
+		"alarmLevel": item.AlarmLevel,
+		"status":     item.Status,
+		"ageSeconds": ageSeconds(item.AlarmTime),
+		"message":    fmt.Sprintf("最近告警 %s", item.AlarmNo),
+	}
+}
+
+func findBridgeSession(raw any, sessionKey string) (map[string]any, bool) {
+	switch typed := raw.(type) {
+	case []map[string]any:
+		for _, item := range typed {
+			if fmt.Sprint(item["sessionKey"]) == sessionKey {
+				return item, true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if session, ok := item.(map[string]any); ok && fmt.Sprint(session["sessionKey"]) == sessionKey {
+				return session, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func (s *PlatformService) ListSmartBindings(filter SmartBindingListFilter) ([]map[string]any, error) {
@@ -2405,6 +2807,7 @@ func (s *PlatformService) CreateSmartBinding(payload SmartBindingPayload) (map[s
 	if err := s.db().Create(&item).Error; err != nil {
 		return nil, err
 	}
+	s.reloadHikvisionBridgeForBinding(payload.ProviderCode, payload.CapabilityCode, "create-smart-binding")
 	return s.GetSmartBindingDetail(item.ID)
 }
 
@@ -2417,6 +2820,10 @@ func (s *PlatformService) UpdateSmartBinding(id uint, payload SmartBindingPayloa
 	if err := s.db().First(&item, id).Error; err != nil {
 		return nil, err
 	}
+	var previousProvider entity.SmartInterfaceProvider
+	var previousCapability entity.SmartInterfaceCapability
+	_ = s.db().First(&previousProvider, item.ProviderID).Error
+	_ = s.db().First(&previousCapability, item.CapabilityID).Error
 	item.ProviderID = providerID
 	item.CapabilityID = capabilityID
 	item.SourceType = payload.SourceType
@@ -2427,12 +2834,33 @@ func (s *PlatformService) UpdateSmartBinding(id uint, payload SmartBindingPayloa
 	if err := s.db().Save(&item).Error; err != nil {
 		return nil, err
 	}
+	switch {
+	case shouldReloadHikvisionBinding(previousProvider.ProviderCode, previousCapability.CapabilityCode) &&
+		shouldReloadHikvisionBinding(payload.ProviderCode, payload.CapabilityCode):
+		s.reloadHikvisionBridgeForBinding(payload.ProviderCode, payload.CapabilityCode, "update-smart-binding")
+	case shouldReloadHikvisionBinding(previousProvider.ProviderCode, previousCapability.CapabilityCode):
+		s.reloadHikvisionBridgeForBinding(previousProvider.ProviderCode, previousCapability.CapabilityCode, "update-smart-binding-old")
+	case shouldReloadHikvisionBinding(payload.ProviderCode, payload.CapabilityCode):
+		s.reloadHikvisionBridgeForBinding(payload.ProviderCode, payload.CapabilityCode, "update-smart-binding-new")
+	}
 	return s.GetSmartBindingDetail(id)
 }
 
 func (s *PlatformService) DeleteSmartBinding(id uint) error {
+	var item entity.SmartDeviceBinding
+	if err := s.db().First(&item, id).Error; err != nil {
+		return err
+	}
+	var provider entity.SmartInterfaceProvider
+	var capability entity.SmartInterfaceCapability
+	_ = s.db().First(&provider, item.ProviderID).Error
+	_ = s.db().First(&capability, item.CapabilityID).Error
 	_ = s.db().Where("binding_id = ?", id).Delete(&entity.SmartBindingRule{}).Error
-	return s.db().Delete(&entity.SmartDeviceBinding{}, id).Error
+	if err := s.db().Delete(&entity.SmartDeviceBinding{}, id).Error; err != nil {
+		return err
+	}
+	s.reloadHikvisionBridgeForBinding(provider.ProviderCode, capability.CapabilityCode, "delete-smart-binding")
+	return nil
 }
 
 func (s *PlatformService) GetSmartBindingDetail(id uint) (map[string]any, error) {
@@ -3995,6 +4423,17 @@ func toUint(value any) uint {
 	default:
 		return 0
 	}
+}
+
+func ageSeconds(value time.Time) int {
+	if value.IsZero() {
+		return 0
+	}
+	seconds := int(time.Since(value).Seconds())
+	if seconds < 0 {
+		return 0
+	}
+	return seconds
 }
 
 func maxInt(current, fallback int) int {

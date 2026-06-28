@@ -152,6 +152,7 @@ func New(cfg *config.Config, handlers Handlers) *gin.Engine {
 	protected.GET("/smart/bindings", handlers.Platform.ListSmartBindings)
 	protected.POST("/smart/bindings", handlers.Platform.CreateSmartBinding)
 	protected.GET("/smart/bindings/:id", handlers.Platform.GetSmartBindingDetail)
+	protected.POST("/smart/bindings/:id/test", handlers.Platform.TestSmartBinding)
 	protected.PUT("/smart/bindings/:id", handlers.Platform.UpdateSmartBinding)
 	protected.DELETE("/smart/bindings/:id", handlers.Platform.DeleteSmartBinding)
 	protected.POST("/smart/bindings/:id/rules", handlers.Platform.CreateSmartBindingRule)
