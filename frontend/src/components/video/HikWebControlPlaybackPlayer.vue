@@ -1175,6 +1175,7 @@ const pausePlayback = async () => {
     6000,
     (callbacks) =>
       sdk?.I_Pause?.({
+        iWndIndex: 0,
         success: callbacks.success,
         error: callbacks.error,
       }),
@@ -1188,6 +1189,7 @@ const resumePlayback = async () => {
     6000,
     (callbacks) =>
       sdk?.I_Resume?.({
+        iWndIndex: 0,
         success: callbacks.success,
         error: callbacks.error,
       }),
@@ -1201,6 +1203,7 @@ const playFast = async () => {
     6000,
     (callbacks) =>
       sdk?.I_PlayFast?.({
+        iWndIndex: 0,
         success: callbacks.success,
         error: callbacks.error,
       }),
@@ -1214,6 +1217,7 @@ const playSlow = async () => {
     6000,
     (callbacks) =>
       sdk?.I_PlaySlow?.({
+        iWndIndex: 0,
         success: callbacks.success,
         error: callbacks.error,
       }),
@@ -1231,6 +1235,7 @@ const getOSDTime = async () => {
       3000,
       (callbacks) =>
         getOsdTime({
+          iWndIndex: 0,
           success: callbacks.success,
           error: callbacks.error,
         }),
