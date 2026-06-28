@@ -86,7 +86,7 @@ extern "C" int hik_setup_alarm_chan_v41(int userID) {
     param.dwSize = sizeof(param);
     param.byLevel = 1;
     param.byAlarmInfoType = 1;
-    param.byRetAlarmTypeV40 = 1;
+    param.byRetAlarmTypeV40 = 0;
     param.byDeployType = 1;
     return (int)NET_DVR_SetupAlarmChan_V41((LONG)userID, &param);
 }
