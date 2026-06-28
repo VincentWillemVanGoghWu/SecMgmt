@@ -109,17 +109,19 @@ func deliverWechatTemplatePush(config entity.PushConfig, data map[string]wechatT
 	templateID := strings.TrimSpace(config.TemplateID)
 	receiverOpenIDs := decodeJSONStringSlice(config.ReceiverOpenIDsJSON)
 	if appID == "" || appSecret == "" || templateID == "" {
+		detail := "缺少 AppID、AppSecret 或模板ID"
 		return pushDeliveryResult{
 			Status:       "failed",
-			Message:      "微信推送配置不完整",
-			ErrorMessage: "missing appId, appSecret, or templateId",
+			Message:      buildPushFailureMessage("微信推送配置不完整", detail),
+			ErrorMessage: detail,
 		}
 	}
 	if len(receiverOpenIDs) == 0 {
+		detail := "未配置接收人 OpenID"
 		return pushDeliveryResult{
 			Status:       "failed",
-			Message:      "未配置微信接收人 OpenID",
-			ErrorMessage: "receiver open ids is empty",
+			Message:      buildPushFailureMessage("未配置微信接收人 OpenID", detail),
+			ErrorMessage: detail,
 		}
 	}
 
@@ -136,10 +138,11 @@ func deliverWechatTemplatePush(config entity.PushConfig, data map[string]wechatT
 		})
 	}
 	if len(requestPayloads) == 0 {
+		detail := "接收人 OpenID 全为空"
 		return pushDeliveryResult{
 			Status:       "failed",
-			Message:      "未配置有效的微信接收人 OpenID",
-			ErrorMessage: "all receiver open ids are blank",
+			Message:      buildPushFailureMessage("未配置有效的微信接收人 OpenID", detail),
+			ErrorMessage: detail,
 		}
 	}
 
@@ -156,11 +159,12 @@ func deliverWechatTemplatePush(config entity.PushConfig, data map[string]wechatT
 	client := &http.Client{Timeout: 10 * time.Second}
 	accessToken, tokenErr := fetchWechatAccessToken(client, appID, appSecret)
 	if tokenErr != nil {
+		detail := tokenErr.Error()
 		return pushDeliveryResult{
 			Status:       "failed",
-			Message:      "获取微信 access_token 失败",
+			Message:      buildPushFailureMessage("获取微信 access_token 失败", detail),
 			RequestBody:  requestBody,
-			ErrorMessage: tokenErr.Error(),
+			ErrorMessage: detail,
 		}
 	}
 
@@ -200,12 +204,15 @@ func deliverWechatTemplatePush(config entity.PushConfig, data map[string]wechatT
 		result.Message = fmt.Sprintf("微信模板消息推送成功，共 %d 人", successCount)
 	case successCount > 0:
 		result.Status = "failed"
-		result.Message = fmt.Sprintf("微信模板消息部分成功，成功 %d/%d", successCount, len(requestPayloads))
 		result.ErrorMessage = strings.Join(errorMessages, "; ")
+		result.Message = buildPushFailureMessage(
+			fmt.Sprintf("微信模板消息部分成功，成功 %d/%d", successCount, len(requestPayloads)),
+			result.ErrorMessage,
+		)
 	default:
 		result.Status = "failed"
-		result.Message = "微信模板消息推送失败"
 		result.ErrorMessage = strings.Join(errorMessages, "; ")
+		result.Message = buildPushFailureMessage("微信模板消息推送失败", result.ErrorMessage)
 	}
 	return result
 }
@@ -229,7 +236,7 @@ func fetchWechatAccessToken(client *http.Client, appID, appSecret string) (strin
 
 	var parsed wechatAccessTokenResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", err
+		return "", fmt.Errorf("解析微信 access_token 响应失败: %w, body=%s", err, compactPushErrorDetail(string(body)))
 	}
 	if strings.TrimSpace(parsed.AccessToken) == "" {
 		if parsed.ErrMsg == "" {
@@ -266,10 +273,10 @@ func sendWechatTemplateMessage(client *http.Client, accessToken string, payload 
 
 	var parsed wechatTemplateSendResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return wechatTemplateSendResponse{}, err
+		return wechatTemplateSendResponse{}, fmt.Errorf("解析微信模板消息响应失败: %w, body=%s", err, compactPushErrorDetail(string(body)))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return parsed, fmt.Errorf("wechat template send returned status %d", resp.StatusCode)
+		return parsed, fmt.Errorf("wechat template send returned status %d: %s", resp.StatusCode, compactPushErrorDetail(string(body)))
 	}
 	if parsed.ErrCode != 0 {
 		return parsed, fmt.Errorf("wechat template send error %d: %s", parsed.ErrCode, parsed.ErrMsg)
@@ -469,4 +476,25 @@ func containsStringFold(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func buildPushFailureMessage(summary, detail string) string {
+	detail = compactPushErrorDetail(detail)
+	if detail == "" {
+		return summary
+	}
+	return summary + "： " + detail
+}
+
+func compactPushErrorDetail(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return ""
+	}
+	detail = strings.Join(strings.Fields(detail), " ")
+	runes := []rune(detail)
+	if len(runes) <= 180 {
+		return detail
+	}
+	return string(runes[:180]) + "..."
 }
