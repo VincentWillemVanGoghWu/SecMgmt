@@ -94,8 +94,8 @@ MYSQL_DSN=<生产数据库连接串>
 
 风险提醒：
 
-- 仓库中 Linux SDK 目录名可能是 `HCNetSDK_linux64`。
-- Linux 文件系统大小写敏感，必须确保代码、Dockerfile、目录名、`LD_LIBRARY_PATH` 完全一致。
+- 仓库中 Linux SDK 目录名为 `HCNetSDK_Linux64`。
+- Linux 文件系统大小写敏感，必须确保代码、Dockerfile、服务器目录名、`HIKVISION_SDK_PATH`、`LD_LIBRARY_PATH` 完全一致。
 - 如果不一致，常见表现是 SDK 加载失败、设备连接测试失败、容器启动后视频相关功能不可用。
 
 可通过环境变量显式指定：

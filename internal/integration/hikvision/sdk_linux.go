@@ -26,6 +26,7 @@ import (
 
 const (
 	commAlarmV30             = 0x4000
+	commAlarmV40             = 0x4007
 	commISAPIAlarm           = 0x6009
 	motionDetectionAlarmType = 3
 	netDVRPlayStart          = 1
@@ -160,6 +161,34 @@ type alarmInfoV30 struct {
 	AlarmRelateChannel [64]byte
 	Channel            [64]byte
 	DiskNumber         [33]byte
+}
+
+type dvrTimeEx struct {
+	Year   uint16
+	Month  byte
+	Day    byte
+	Hour   byte
+	Minute byte
+	Second byte
+	Res    byte
+}
+
+type alarmFixedHeaderV40 struct {
+	AlarmType          uint32
+	AlarmTime          dvrTimeEx
+	AlarmChannelUnion  [116]byte
+	Res                uintptr
+	TimeDiffFlag       byte
+	TimeDifferenceHour byte
+	TimeDifferenceMin  byte
+	ResByte            byte
+	DevInfoIvmsChannel uint16
+	Res2               [2]byte
+}
+
+type alarmInfoV40 struct {
+	Fixed     alarmFixedHeaderV40
+	AlarmData uintptr
 }
 
 type alarmISAPIInfo struct {
@@ -634,6 +663,9 @@ func parseMotionAlarm(command int32, pAlarmInfo uintptr) (bool, []int) {
 	if isMotion, channels := parseMotionAlarmV30(command, pAlarmInfo); isMotion {
 		return true, channels
 	}
+	if isMotion, channels := parseMotionAlarmV40(command, pAlarmInfo); isMotion {
+		return true, channels
+	}
 	return parseMotionAlarmISAPI(command, pAlarmInfo)
 }
 
@@ -649,6 +681,38 @@ func parseMotionAlarmV30(command int32, pAlarmInfo uintptr) (bool, []int) {
 	for index, value := range info.Channel {
 		if value == 1 {
 			channels = append(channels, index+1)
+		}
+	}
+	return true, channels
+}
+
+func parseMotionAlarmV40(command int32, pAlarmInfo uintptr) (bool, []int) {
+	if command != commAlarmV40 || pAlarmInfo == 0 {
+		return false, nil
+	}
+	info := (*alarmInfoV40)(unsafe.Pointer(pAlarmInfo))
+	if int(info.Fixed.AlarmType) != motionDetectionAlarmType {
+		return false, nil
+	}
+	channelCount := int(uint32(info.Fixed.AlarmChannelUnion[0]) |
+		uint32(info.Fixed.AlarmChannelUnion[1])<<8 |
+		uint32(info.Fixed.AlarmChannelUnion[2])<<16 |
+		uint32(info.Fixed.AlarmChannelUnion[3])<<24)
+	if channelCount <= 0 || info.AlarmData == 0 {
+		return true, nil
+	}
+	if channelCount > 512 {
+		channelCount = 512
+	}
+	channelValues := unsafe.Slice((*uint32)(unsafe.Pointer(info.AlarmData)), channelCount)
+	channels := make([]int, 0, len(channelValues))
+	for _, value := range channelValues {
+		if value == 0 || value == 0xffffffff {
+			continue
+		}
+		channel := int(value)
+		if !containsInt(channels, channel) {
+			channels = append(channels, channel)
 		}
 	}
 	return true, channels

@@ -57,7 +57,7 @@ export LD_LIBRARY_PATH="$PWD/third_party/HCNetSDK_Linux64/Library:$PWD/third_par
 go run ./cmd/server
 ```
 
-仓库当前目录名显示为 `HCNetSDK_linux64`，而 Go CGO、Dockerfile、Compose 与默认配置引用 `HCNetSDK_Linux64`。Linux 文件系统区分大小写，部署前必须统一目录名和所有引用，否则编译阶段 COPY/include 或运行期动态库加载会失败。
+仓库、Go CGO、Dockerfile、Compose 与默认配置均统一引用 `HCNetSDK_Linux64`。Linux 文件系统区分大小写，部署时仍需确认服务器上的目录名、`HIKVISION_SDK_PATH` 和 `LD_LIBRARY_PATH` 完全一致，否则编译阶段 COPY/include 或运行期动态库加载会失败。
 
 ## 3. 构建与测试
 

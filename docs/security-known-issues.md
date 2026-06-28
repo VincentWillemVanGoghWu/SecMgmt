@@ -24,7 +24,7 @@
 
 | 项目 | 当前状态 | 影响/建议 |
 |---|---|---|
-| Linux SDK 路径大小写 | 实际目录 `HCNetSDK_linux64`，引用多为 `HCNetSDK_Linux64` | Linux 构建可能失败；统一命名 |
+| Linux SDK 路径大小写 | 仓库路径已统一为 `HCNetSDK_Linux64`，部署环境仍可能残留旧小写目录或环境变量 | 发布前检查服务器目录、`HIKVISION_SDK_PATH`、`LD_LIBRARY_PATH` 是否一致 |
 | Redis | 配置字段存在，未使用 | 不具备 token 黑名单、分布式限流或缓存能力 |
 | Logout | 仅返回成功 | JWT 在过期前仍有效；需要黑名单或短 token + refresh token |
 | 权限校验 | 前端可见性为主 | 必须补后端 permission/data-scope enforcement |

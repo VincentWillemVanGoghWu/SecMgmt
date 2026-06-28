@@ -164,8 +164,8 @@ sequenceDiagram
 部署风险：
 
 - 代码默认 Linux 路径为 `third_party/HCNetSDK_Linux64`。
-- 当前仓库实际存在目录名可能为 `HCNetSDK_linux64`，在 Linux 这类大小写敏感系统上会导致加载失败。
-- Dockerfile 和 `LD_LIBRARY_PATH` 也引用 `HCNetSDK_Linux64`，发布前必须统一目录名。
+- 仓库、Dockerfile、默认配置和 `LD_LIBRARY_PATH` 已统一引用 `HCNetSDK_Linux64`。
+- Linux 文件系统大小写敏感，发布前仍需确认服务器上的 `HIKVISION_SDK_PATH` 和实际目录名一致。
 
 ## 7. 告警模块
 

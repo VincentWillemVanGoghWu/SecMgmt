@@ -184,7 +184,7 @@ AllowOrigins: []string{"*"}
 
 - 动态库路径不在 `LD_LIBRARY_PATH`。
 - Dockerfile 拷贝目录名与实际目录名不一致。
-- 代码默认 `HCNetSDK_Linux64`，仓库目录为 `HCNetSDK_linux64`。
+- 代码、镜像配置或服务器实际目录名大小写不一致。
 - 缺少 SDK 依赖的系统库。
 
 处理：
