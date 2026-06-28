@@ -244,8 +244,12 @@ const getCredentialText = (record: PushConfigRecord) => {
   return record.secretConfigured ? "已配置 Secret 加签" : "未配置 Secret"
 }
 
-const getReceiverText = (record: PushConfigRecord) =>
-  record.receiverOpenIds.length ? record.receiverOpenIds.join(" / ") : "-"
+const getReceiverText = (record: PushConfigRecord) => {
+  if (record.providerType === "wechat") {
+    return record.receiverOpenIds.length ? `已配置 ${record.receiverOpenIds.length} 个接收人` : "未配置接收人"
+  }
+  return record.webhook || "-"
+}
 
 const normalizeOpenIds = (value: string) =>
   value
@@ -537,7 +541,7 @@ onMounted(async () => {
             <td>
               <div class="push-page__stack-cell unified-list-page__stack-cell">
                 <strong>{{ getCredentialText(record) }}</strong>
-                <span>{{ record.providerType === "wechat" ? getReceiverText(record) : (record.webhook || "-") }}</span>
+                <span>{{ getReceiverText(record) }}</span>
               </div>
             </td>
             <td>
