@@ -247,7 +247,7 @@ type OperationLog struct {
 	ID               uint      `gorm:"column:id;primaryKey"`
 	TraceID          string    `gorm:"column:trace_id;type:varchar(64)"`
 	Source           string    `gorm:"column:source;type:varchar(20)"`
-	OperatorID       *uint     `gorm:"column:operator_id"`
+	OperatorID       *uint     `gorm:"column:operator_id;type:int"`
 	OperatorUsername string    `gorm:"column:operator_username;type:varchar(50)"`
 	OperatorRealName string    `gorm:"column:operator_real_name;type:varchar(50)"`
 	RoleCodes        string    `gorm:"column:role_codes;type:varchar(255)"`
@@ -277,25 +277,25 @@ type OperationLog struct {
 	AfterSnapshot    string    `gorm:"column:after_snapshot;type:longtext"`
 	ErrorStack       string    `gorm:"column:error_stack;type:longtext"`
 	ResultStatus     string    `gorm:"column:result_status;type:varchar(20)"`
-	ResponseStatus   int       `gorm:"column:response_status"`
-	DurationMs       int64     `gorm:"column:duration_ms"`
+	ResponseStatus   int       `gorm:"column:response_status;type:int"`
+	DurationMs       int64     `gorm:"column:duration_ms;type:bigint"`
 	StoragePartition string    `gorm:"column:storage_partition;type:varchar(32)"`
-	RetentionDays    int       `gorm:"column:retention_days"`
+	RetentionDays    int       `gorm:"column:retention_days;type:int"`
 	ExtraJSON        string    `gorm:"column:extra_json;type:longtext"`
-	OperationTime    time.Time `gorm:"column:operation_time;type:datetime(3)"`
-	CreatedAt        time.Time `gorm:"column:created_at"`
+	OperationTime    time.Time `gorm:"column:operation_time;type:datetime(3);not null"`
+	CreatedAt        time.Time `gorm:"column:created_at;type:datetime;not null"`
 }
 
 func (OperationLog) TableName() string { return "operation_log" }
 
 type SystemSetting struct {
 	ID           uint      `gorm:"column:id;primaryKey"`
-	SettingKey   string    `gorm:"column:setting_key"`
-	SettingName  string    `gorm:"column:setting_name"`
-	SettingValue string    `gorm:"column:setting_value"`
-	Remark       string    `gorm:"column:remark"`
-	CreatedAt    time.Time `gorm:"column:created_at"`
-	UpdatedAt    time.Time `gorm:"column:updated_at"`
+	SettingKey   string    `gorm:"column:setting_key;type:varchar(120);not null"`
+	SettingName  string    `gorm:"column:setting_name;type:varchar(150);not null"`
+	SettingValue string    `gorm:"column:setting_value;type:varchar(255);not null"`
+	Remark       string    `gorm:"column:remark;type:varchar(255)"`
+	CreatedAt    time.Time `gorm:"column:created_at;type:datetime;not null"`
+	UpdatedAt    time.Time `gorm:"column:updated_at;type:datetime;not null"`
 }
 
 func (SystemSetting) TableName() string { return "system_setting" }
