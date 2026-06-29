@@ -686,6 +686,24 @@ func resolveEmailSenderConfig(cfg *config.Config) (string, int, string, string, 
 	smtpPassword := strings.TrimSpace(cfg.PushEmailPassword)
 	fromAddress := strings.TrimSpace(cfg.PushEmailFrom)
 	fromName := strings.TrimSpace(cfg.PushEmailFromName)
+	if smtpHost == "" {
+		smtpHost = config.DefaultPushEmailSMTPHost
+	}
+	if smtpPort <= 0 {
+		smtpPort = config.DefaultPushEmailSMTPPort
+	}
+	if smtpUsername == "" {
+		smtpUsername = config.DefaultPushEmailUsername
+	}
+	if smtpPassword == "" {
+		smtpPassword = config.DefaultPushEmailPassword
+	}
+	if fromAddress == "" {
+		fromAddress = config.DefaultPushEmailFrom
+	}
+	if fromName == "" {
+		fromName = config.DefaultPushEmailFromName
+	}
 	if fromAddress == "" {
 		fromAddress = smtpUsername
 	}
