@@ -268,6 +268,9 @@ const menuPermissionBindingMap: Record<string, { codes?: string[]; prefixes?: st
   "safety-alarm-stats": {
     codes: ["report:alarm:view", "report:alarm:export"],
   },
+  "safety-operation-logs": {
+    codes: ["log:operation:view", "log:operation:export"],
+  },
   "monitor-preview": {
     codes: ["video:webcontrol:view"],
     prefixes: ["video:live:"],

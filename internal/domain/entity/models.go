@@ -245,44 +245,44 @@ func (DeviceStatusLog) TableName() string { return "device_status_log" }
 
 type OperationLog struct {
 	ID               uint      `gorm:"column:id;primaryKey"`
-	TraceID          string    `gorm:"column:trace_id"`
-	Source           string    `gorm:"column:source"`
+	TraceID          string    `gorm:"column:trace_id;type:varchar(64)"`
+	Source           string    `gorm:"column:source;type:varchar(20)"`
 	OperatorID       *uint     `gorm:"column:operator_id"`
-	OperatorUsername string    `gorm:"column:operator_username"`
-	OperatorRealName string    `gorm:"column:operator_real_name"`
-	RoleCodes        string    `gorm:"column:role_codes"`
-	RoleNames        string    `gorm:"column:role_names"`
-	ClientIP         string    `gorm:"column:client_ip"`
-	IPLocation       string    `gorm:"column:ip_location"`
-	UserAgent        string    `gorm:"column:user_agent"`
-	OSName           string    `gorm:"column:os_name"`
-	MenuCode         string    `gorm:"column:menu_code"`
-	MenuName         string    `gorm:"column:menu_name"`
-	RoutePath        string    `gorm:"column:route_path"`
-	PageTitle        string    `gorm:"column:page_title"`
-	PageComponent    string    `gorm:"column:page_component"`
-	ActionCode       string    `gorm:"column:action_code"`
-	ActionName       string    `gorm:"column:action_name"`
-	OperationType    string    `gorm:"column:operation_type"`
-	ObjectType       string    `gorm:"column:object_type"`
-	ObjectID         string    `gorm:"column:object_id"`
-	ObjectName       string    `gorm:"column:object_name"`
-	ObjectLocation   string    `gorm:"column:object_location"`
-	RequestMethod    string    `gorm:"column:request_method"`
-	RequestPath      string    `gorm:"column:request_path"`
-	RequestQuery     string    `gorm:"column:request_query"`
-	RequestParams    string    `gorm:"column:request_params"`
-	DevicePointInfo  string    `gorm:"column:device_point_info"`
-	BeforeSnapshot   string    `gorm:"column:before_snapshot"`
-	AfterSnapshot    string    `gorm:"column:after_snapshot"`
-	ErrorStack       string    `gorm:"column:error_stack"`
-	ResultStatus     string    `gorm:"column:result_status"`
+	OperatorUsername string    `gorm:"column:operator_username;type:varchar(50)"`
+	OperatorRealName string    `gorm:"column:operator_real_name;type:varchar(50)"`
+	RoleCodes        string    `gorm:"column:role_codes;type:varchar(255)"`
+	RoleNames        string    `gorm:"column:role_names;type:varchar(255)"`
+	ClientIP         string    `gorm:"column:client_ip;type:varchar(64)"`
+	IPLocation       string    `gorm:"column:ip_location;type:varchar(120)"`
+	UserAgent        string    `gorm:"column:user_agent;type:text"`
+	OSName           string    `gorm:"column:os_name;type:varchar(50)"`
+	MenuCode         string    `gorm:"column:menu_code;type:varchar(100)"`
+	MenuName         string    `gorm:"column:menu_name;type:varchar(150)"`
+	RoutePath        string    `gorm:"column:route_path;type:varchar(255)"`
+	PageTitle        string    `gorm:"column:page_title;type:varchar(150)"`
+	PageComponent    string    `gorm:"column:page_component;type:varchar(100)"`
+	ActionCode       string    `gorm:"column:action_code;type:varchar(150)"`
+	ActionName       string    `gorm:"column:action_name;type:varchar(150)"`
+	OperationType    string    `gorm:"column:operation_type;type:varchar(80)"`
+	ObjectType       string    `gorm:"column:object_type;type:varchar(80)"`
+	ObjectID         string    `gorm:"column:object_id;type:varchar(100)"`
+	ObjectName       string    `gorm:"column:object_name;type:varchar(255)"`
+	ObjectLocation   string    `gorm:"column:object_location;type:varchar(255)"`
+	RequestMethod    string    `gorm:"column:request_method;type:varchar(10)"`
+	RequestPath      string    `gorm:"column:request_path;type:varchar(255)"`
+	RequestQuery     string    `gorm:"column:request_query;type:text"`
+	RequestParams    string    `gorm:"column:request_params;type:longtext"`
+	DevicePointInfo  string    `gorm:"column:device_point_info;type:longtext"`
+	BeforeSnapshot   string    `gorm:"column:before_snapshot;type:longtext"`
+	AfterSnapshot    string    `gorm:"column:after_snapshot;type:longtext"`
+	ErrorStack       string    `gorm:"column:error_stack;type:longtext"`
+	ResultStatus     string    `gorm:"column:result_status;type:varchar(20)"`
 	ResponseStatus   int       `gorm:"column:response_status"`
 	DurationMs       int64     `gorm:"column:duration_ms"`
-	StoragePartition string    `gorm:"column:storage_partition"`
+	StoragePartition string    `gorm:"column:storage_partition;type:varchar(32)"`
 	RetentionDays    int       `gorm:"column:retention_days"`
-	ExtraJSON        string    `gorm:"column:extra_json"`
-	OperationTime    time.Time `gorm:"column:operation_time"`
+	ExtraJSON        string    `gorm:"column:extra_json;type:longtext"`
+	OperationTime    time.Time `gorm:"column:operation_time;type:datetime(3)"`
 	CreatedAt        time.Time `gorm:"column:created_at"`
 }
 
