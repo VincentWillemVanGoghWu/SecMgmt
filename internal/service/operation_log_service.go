@@ -154,6 +154,54 @@ func (s *OperationLogService) CleanupExpiredLogs() error {
 
 func (s *OperationLogService) EnsureBootstrapData() error {
 	db := s.repo.DB()
+	ensureMenu := func(menu *entity.Menu) error {
+		if err := db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "code"}},
+			DoUpdates: clause.AssignmentColumns([]string{"name", "parent_id", "route_name", "route_path", "icon", "menu_type", "sort", "status"}),
+		}).Create(menu).Error; err != nil {
+			return err
+		}
+		return db.Where("code = ?", menu.Code).First(menu).Error
+	}
+	ensurePermission := func(permission *entity.Permission) error {
+		if err := db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "code"}},
+			DoUpdates: clause.AssignmentColumns([]string{"name", "status", "is_button"}),
+		}).Create(permission).Error; err != nil {
+			return err
+		}
+		return db.Where("code = ?", permission.Code).First(permission).Error
+	}
+	ensureRoleMenuBinding := func(roleCode, menuCode string) error {
+		var role entity.Role
+		if err := db.Where("role_code = ?", roleCode).First(&role).Error; err != nil {
+			return nil
+		}
+		var menu entity.Menu
+		if err := db.Where("code = ?", menuCode).First(&menu).Error; err != nil {
+			return err
+		}
+		return db.Exec(
+			"INSERT IGNORE INTO sys_role_menu (role_id, menu_id) VALUES (?, ?)",
+			role.ID,
+			menu.ID,
+		).Error
+	}
+	ensureRolePermissionBinding := func(roleCode, permissionCode string) error {
+		var role entity.Role
+		if err := db.Where("role_code = ?", roleCode).First(&role).Error; err != nil {
+			return nil
+		}
+		var permission entity.Permission
+		if err := db.Where("code = ?", permissionCode).First(&permission).Error; err != nil {
+			return err
+		}
+		return db.Exec(
+			"INSERT IGNORE INTO sys_role_permission (role_id, permission_id) VALUES (?, ?)",
+			role.ID,
+			permission.ID,
+		).Error
+	}
 	if err := db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "setting_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"setting_name", "setting_value", "remark", "updated_at"}),
@@ -166,25 +214,27 @@ func (s *OperationLogService) EnsureBootstrapData() error {
 		return err
 	}
 
-	var safetyMenu entity.Menu
-	if err := db.Where("code = ?", "safety").First(&safetyMenu).Error; err != nil {
-		safetyMenu = entity.Menu{
-			Name:     "安全日志",
-			Code:     "safety",
-			Icon:     "Warning",
-			MenuType: "catalog",
-			Sort:     2,
-			Status:   "enabled",
-		}
-		if err := db.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "code"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "icon", "menu_type", "sort", "status"}),
-		}).Create(&safetyMenu).Error; err != nil {
-			return err
-		}
-		if err := db.Where("code = ?", "safety").First(&safetyMenu).Error; err != nil {
-			return err
-		}
+	safetyMenu := entity.Menu{
+		Name:     "安全日志",
+		Code:     "safety",
+		Icon:     "Warning",
+		MenuType: "catalog",
+		Sort:     2,
+		Status:   "enabled",
+	}
+	if err := ensureMenu(&safetyMenu); err != nil {
+		return err
+	}
+	pushMenu := entity.Menu{
+		Name:     "推送管理",
+		Code:     "push",
+		Icon:     "Bell",
+		MenuType: "catalog",
+		Sort:     6,
+		Status:   "enabled",
+	}
+	if err := ensureMenu(&pushMenu); err != nil {
+		return err
 	}
 
 	menu := entity.Menu{
@@ -198,53 +248,46 @@ func (s *OperationLogService) EnsureBootstrapData() error {
 		Sort:      5,
 		Status:    "enabled",
 	}
-	if err := db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "code"}},
-		DoUpdates: clause.AssignmentColumns([]string{"name", "parent_id", "route_name", "route_path", "icon", "menu_type", "sort", "status"}),
-	}).Create(&menu).Error; err != nil {
+	if err := ensureMenu(&menu); err != nil {
+		return err
+	}
+	pushLogMenu := entity.Menu{
+		Name:      "推送日志",
+		Code:      "push-logs",
+		ParentID:  &pushMenu.ID,
+		RouteName: "push-logs",
+		RoutePath: "/push/logs",
+		Icon:      "Files",
+		MenuType:  "menu",
+		Sort:      2,
+		Status:    "enabled",
+	}
+	if err := ensureMenu(&pushLogMenu); err != nil {
 		return err
 	}
 
 	permissions := []entity.Permission{
 		{Name: "查看操作日志", Code: "log:operation:view", Status: "enabled", IsButton: true},
 		{Name: "导出操作日志", Code: "log:operation:export", Status: "enabled", IsButton: true},
+		{Name: "查看推送日志", Code: "push:log:view", Status: "enabled", IsButton: true},
+		{Name: "重试推送日志", Code: "push:log:retry", Status: "enabled", IsButton: true},
 	}
 	for _, permission := range permissions {
-		if err := db.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "code"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "status", "is_button"}),
-		}).Create(&permission).Error; err != nil {
+		if err := ensurePermission(&permission); err != nil {
 			return err
 		}
 	}
 
-	var adminRole entity.Role
-	if err := db.Where("role_code = ?", "admin").First(&adminRole).Error; err != nil {
-		return nil
-	}
-
-	var savedMenu entity.Menu
-	if err := db.Where("code = ?", "safety-operation-logs").First(&savedMenu).Error; err == nil {
-		if err := db.Exec(
-			"INSERT IGNORE INTO sys_role_menu (role_id, menu_id) VALUES (?, ?)",
-			adminRole.ID,
-			savedMenu.ID,
-		).Error; err != nil {
-			return err
+	for _, roleCode := range []string{"admin", "User"} {
+		for _, menuCode := range []string{"safety-operation-logs", "push", "push-logs"} {
+			if err := ensureRoleMenuBinding(roleCode, menuCode); err != nil {
+				return err
+			}
 		}
-	}
-
-	for _, code := range []string{"log:operation:view", "log:operation:export"} {
-		var permission entity.Permission
-		if err := db.Where("code = ?", code).First(&permission).Error; err != nil {
-			continue
-		}
-		if err := db.Exec(
-			"INSERT IGNORE INTO sys_role_permission (role_id, permission_id) VALUES (?, ?)",
-			adminRole.ID,
-			permission.ID,
-		).Error; err != nil {
-			return err
+		for _, permissionCode := range []string{"log:operation:view", "log:operation:export", "push:log:view", "push:log:retry"} {
+			if err := ensureRolePermissionBinding(roleCode, permissionCode); err != nil {
+				return err
+			}
 		}
 	}
 
