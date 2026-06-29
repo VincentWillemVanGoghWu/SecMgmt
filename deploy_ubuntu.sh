@@ -988,6 +988,10 @@ nginx_config_hash() {
   hash_paths "${NGINX_CONF_FILE}"
 }
 
+backend_env_hash() {
+  hash_paths "${BACKEND_ENV_FILE}"
+}
+
 should_rebuild_service() {
   local service_name="$1"
   [[ ",${REBUILD_TARGETS}," == *",${service_name},"* ]]
@@ -1021,16 +1025,22 @@ build_service_if_needed() {
 
 start_application_stack() {
   local backend_stamp="${CACHE_DIR}/backend-image.sha256"
+  local backend_env_stamp="${CACHE_DIR}/backend-env.sha256"
   local frontend_stamp="${CACHE_DIR}/frontend-image.sha256"
   local nginx_stamp="${CACHE_DIR}/frontend-nginx-conf.sha256"
   local backend_hash
+  local backend_env_current_hash
+  local backend_env_previous_hash
   local frontend_hash
   local nginx_hash
   local previous_nginx_hash
   local nginx_config_changed=0
+  local backend_env_changed=0
   local recreate_services=()
 
   backend_hash="$(backend_build_hash)"
+  backend_env_current_hash="$(backend_env_hash)"
+  backend_env_previous_hash="$(read_stamp "${backend_env_stamp}")"
   frontend_hash="$(frontend_build_hash)"
   nginx_hash="$(nginx_config_hash)"
   previous_nginx_hash="$(read_stamp "${nginx_stamp}")"
@@ -1040,6 +1050,13 @@ start_application_stack() {
 
   if should_rebuild_service "backend"; then
     recreate_services+=("backend")
+  fi
+  if [[ "${backend_env_current_hash}" != "${backend_env_previous_hash}" ]]; then
+    backend_env_changed=1
+    log_info "Backend env changed, recreating backend container."
+    if ! should_rebuild_service "backend"; then
+      recreate_services+=("backend")
+    fi
   fi
   if should_rebuild_service "frontend"; then
     recreate_services+=("frontend")
@@ -1058,6 +1075,9 @@ start_application_stack() {
   fi
 
   compose up -d backend frontend
+  if [[ "${backend_env_changed}" -eq 1 ]]; then
+    write_stamp "${backend_env_stamp}" "${backend_env_current_hash}"
+  fi
   if [[ "${nginx_config_changed}" -eq 1 ]]; then
     write_stamp "${nginx_stamp}" "${nginx_hash}"
   fi
