@@ -207,25 +207,25 @@ onMounted(async () => {
     <PageCard class="device-page__filters-card">
       <SearchForm class="device-page__search-form">
         <div class="app-field">
-          <select v-model="queryForm.factoryId" @change="handleFactoryQueryChange">
+          <select v-model="queryForm.factoryId" @change="handleFactoryQueryChange" v-refresh-on-empty="loadRecords">
             <option value="">厂区</option>
             <option v-for="item in factories" :key="item.id" :value="String(item.id)">{{ item.factoryName }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.zoneId">
+          <select v-model="queryForm.zoneId" v-refresh-on-empty="loadRecords">
             <option value="">区域</option>
             <option v-for="item in queryZoneOptions" :key="item.id" :value="String(item.id)">{{ item.zoneName }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.status">
+          <select v-model="queryForm.status" v-refresh-on-empty="loadRecords">
             <option value="">状态</option>
             <option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field device-page__keyword">
-          <input v-model="queryForm.keyword" type="text" placeholder="输入通道名称" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="输入通道名称" @clear="loadRecords" />
         </div>
         <template #actions>
           <button class="app-button app-button--primary device-page__button device-page__search-button" @click="loadRecords">

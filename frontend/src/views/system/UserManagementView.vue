@@ -239,25 +239,25 @@ onMounted(async () => {
     <PageCard class="user-page__filters-card">
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
-          <select v-model="queryForm.deptId">
+          <select v-model="queryForm.deptId" v-refresh-on-empty="loadRecords">
             <option value="">部门</option>
             <option v-for="item in depts" :key="item.id" :value="String(item.id)">{{ item.deptName }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.roleId">
+          <select v-model="queryForm.roleId" v-refresh-on-empty="loadRecords">
             <option value="">角色</option>
             <option v-for="item in roleOptions" :key="item.id" :value="String(item.id)">{{ item.roleName }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.status">
+          <select v-model="queryForm.status" v-refresh-on-empty="loadRecords">
             <option value="">状态</option>
             <option v-for="item in statusOptions.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field">
-          <input v-model="queryForm.keyword" type="text" placeholder="输入用户名或姓名" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="输入用户名或姓名" @clear="loadRecords" />
         </div>
         <template #actions>
           <button class="app-button app-button--primary user-page__button unified-list-page__button unified-list-page__search-button" type="button" @click="loadRecords">

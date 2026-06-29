@@ -223,10 +223,10 @@ onMounted(async () => {
     <PageCard class="master-data-page__filters-card">
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
-          <input v-model="queryForm.keyword" type="text" placeholder="输入字典名称或编码" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="输入字典名称或编码" @clear="loadDictTypes" />
         </div>
         <div class="app-field">
-          <select v-model="queryForm.status">
+          <select v-model="queryForm.status" v-refresh-on-empty="loadDictTypes">
             <option value="">状态</option>
             <option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>

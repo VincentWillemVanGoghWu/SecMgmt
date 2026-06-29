@@ -146,16 +146,16 @@ onMounted(async () => {
     <PageCard class="master-data-page__filters-card">
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
-          <select v-model="queryForm.factoryId">
+          <select v-model="queryForm.factoryId" v-refresh-on-empty="loadRecords">
             <option value="">所属厂区</option>
             <option v-for="item in factoryOptions" :key="item.id" :value="String(item.id)">{{ item.factoryName }}</option>
           </select>
         </div>
         <div class="app-field">
-          <input v-model="queryForm.keyword" type="text" placeholder="输入区域名称或编码" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="输入区域名称或编码" @clear="loadRecords" />
         </div>
         <div class="app-field">
-          <select v-model="queryForm.status">
+          <select v-model="queryForm.status" v-refresh-on-empty="loadRecords">
             <option value="">状态</option>
             <option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>

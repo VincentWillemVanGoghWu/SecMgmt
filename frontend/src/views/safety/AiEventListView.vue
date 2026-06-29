@@ -99,22 +99,22 @@ onMounted(async () => {
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
           <label>关键字</label>
-          <input v-model="queryForm.keyword" type="text" placeholder="事件编号 / 类型 / 去重键" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="事件编号 / 类型 / 去重键" @clear="loadRecords" />
         </div>
         <div class="app-field">
           <label>事件来源</label>
-          <select v-model="queryForm.sourceType">
+          <select v-model="queryForm.sourceType" v-refresh-on-empty="loadRecords">
             <option value="">全部</option>
             <option v-for="item in sourceOptions" :key="item" :value="item">{{ item }}</option>
           </select>
         </div>
         <div class="app-field">
           <label>事件类型</label>
-          <input v-model="queryForm.eventType" type="text" placeholder="如 helmet_missing / fire" />
+          <ClearableSearchInput v-model="queryForm.eventType" placeholder="如 helmet_missing / fire" @clear="loadRecords" />
         </div>
         <div class="app-field">
           <label>告警等级</label>
-          <select v-model="queryForm.eventLevel">
+          <select v-model="queryForm.eventLevel" v-refresh-on-empty="loadRecords">
             <option v-for="item in eventLevelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>

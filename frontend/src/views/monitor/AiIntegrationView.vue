@@ -901,28 +901,28 @@ onMounted(async () => {
         <el-tab-pane label="接口绑定" name="bindings">
           <SearchForm class="smart-interface-page__search-form smart-interface-page__search-form--bindings unified-list-page__search-form">
             <div class="app-field">
-              <select v-model="bindingQuery.sourceType">
+              <select v-model="bindingQuery.sourceType" v-refresh-on-empty="loadBindings">
                 <option value="" hidden>绑定对象</option>
                 <option value="">全部</option>
                 <option v-for="item in sourceTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="bindingQuery.providerCode">
+              <select v-model="bindingQuery.providerCode" v-refresh-on-empty="loadBindings">
                 <option value="" hidden>接口提供方</option>
                 <option value="">全部</option>
                 <option v-for="item in providers" :key="item.id" :value="item.providerCode">{{ item.providerName }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="bindingQuery.capabilityCode">
+              <select v-model="bindingQuery.capabilityCode" v-refresh-on-empty="loadBindings">
                 <option value="" hidden>能力类型</option>
                 <option value="">全部</option>
                 <option v-for="item in capabilities" :key="item.id" :value="item.capabilityCode">{{ item.capabilityName }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="bindingQuery.enabled">
+              <select v-model="bindingQuery.enabled" v-refresh-on-empty="loadBindings">
                 <option value="" hidden>启用状态</option>
                 <option v-for="item in enabledOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
               </select>
@@ -1011,30 +1011,30 @@ onMounted(async () => {
         <el-tab-pane label="事件流水" name="events">
           <SearchForm class="smart-interface-page__search-form smart-interface-page__search-form--events unified-list-page__search-form">
             <div class="app-field">
-              <input v-model="eventQuery.keyword" type="text" placeholder="事件编号 / 类型 / 去重键" />
+              <ClearableSearchInput v-model="eventQuery.keyword" placeholder="事件编号 / 类型 / 去重键" @clear="handleEventSearch" />
             </div>
             <div class="app-field">
-              <select v-model="eventQuery.providerCode">
+              <select v-model="eventQuery.providerCode" v-refresh-on-empty="handleEventSearch">
                 <option value="" hidden>来源接口</option>
                 <option value="">全部</option>
                 <option v-for="item in providers" :key="item.id" :value="item.providerCode">{{ item.providerName }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="eventQuery.capabilityCode">
+              <select v-model="eventQuery.capabilityCode" v-refresh-on-empty="handleEventSearch">
                 <option value="" hidden>能力类型</option>
                 <option value="">全部</option>
                 <option v-for="item in capabilities" :key="item.id" :value="item.capabilityCode">{{ item.capabilityName }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="eventQuery.sourceStage">
+              <select v-model="eventQuery.sourceStage" v-refresh-on-empty="handleEventSearch">
                 <option value="" hidden>事件阶段</option>
                 <option v-for="item in sourceStageOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="eventQuery.status">
+              <select v-model="eventQuery.status" v-refresh-on-empty="handleEventSearch">
                 <option value="" hidden>状态</option>
                 <option v-for="item in eventStatusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
               </select>

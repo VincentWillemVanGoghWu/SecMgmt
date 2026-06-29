@@ -247,16 +247,16 @@ watch(
     >
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
-          <input v-model="queryForm.keyword" type="text" placeholder="告警编号 / 类型 / 设备 / 区域" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="告警编号 / 类型 / 设备 / 区域" @clear="handleSearch" />
         </div>
         <div class="app-field">
-          <select v-model="queryForm.status">
+          <select v-model="queryForm.status" v-refresh-on-empty="handleSearch">
             <option value="" hidden>告警状态</option>
             <option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.level">
+          <select v-model="queryForm.level" v-refresh-on-empty="handleSearch">
             <option value="" hidden>告警等级</option>
             <option v-for="item in levelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>

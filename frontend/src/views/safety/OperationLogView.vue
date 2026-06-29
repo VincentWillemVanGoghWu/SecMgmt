@@ -202,20 +202,20 @@ onMounted(async () => {
     <PageCard class="operation-log-page__filters-card">
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
-          <input v-model="queryForm.username" type="text" placeholder="操作账号 / 操作人" />
+          <ClearableSearchInput v-model="queryForm.username" placeholder="操作账号 / 操作人" @clear="handleSearch" />
         </div>
         <div class="app-field">
-          <input v-model="queryForm.keyword" type="text" placeholder="菜单 / 按钮 / 对象 / IP 关键字" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="菜单 / 按钮 / 对象 / IP 关键字" @clear="handleSearch" />
         </div>
         <div class="app-field">
-          <select v-model="queryForm.operationType">
+          <select v-model="queryForm.operationType" v-refresh-on-empty="handleSearch">
             <option v-for="item in operationTypeOptions" :key="item.value || 'all-type'" :value="item.value">
               {{ item.label }}
             </option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.resultStatus">
+          <select v-model="queryForm.resultStatus" v-refresh-on-empty="handleSearch">
             <option v-for="item in resultStatusOptions" :key="item.value || 'all-result'" :value="item.value">
               {{ item.label }}
             </option>

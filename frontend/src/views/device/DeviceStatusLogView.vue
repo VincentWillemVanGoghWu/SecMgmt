@@ -167,19 +167,19 @@ onMounted(async () => {
     <PageCard class="device-page__filters-card">
       <SearchForm class="device-page__search-form">
         <div class="app-field">
-          <select v-model="queryForm.deviceType">
+          <select v-model="queryForm.deviceType" v-refresh-on-empty="handleSearch">
             <option value="">设备类型</option>
             <option v-for="item in deviceTypeOptions.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.status">
+          <select v-model="queryForm.status" v-refresh-on-empty="handleSearch">
             <option value="">状态</option>
             <option v-for="item in statusOptions.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field device-page__keyword">
-          <input v-model="queryForm.deviceName" type="text" placeholder="输入设备名称关键字" />
+          <ClearableSearchInput v-model="queryForm.deviceName" placeholder="输入设备名称关键字" @clear="handleSearch" />
         </div>
         <div class="app-field device-page__range">
           <el-date-picker

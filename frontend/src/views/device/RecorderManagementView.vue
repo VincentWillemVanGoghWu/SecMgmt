@@ -342,19 +342,19 @@ onMounted(async () => {
     <PageCard class="device-page__filters-card">
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
-          <select v-model="queryForm.factoryId">
+          <select v-model="queryForm.factoryId" v-refresh-on-empty="loadRecords">
             <option value="">所属厂区</option>
             <option v-for="item in factories" :key="item.id" :value="String(item.id)">{{ item.factoryName }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.status">
+          <select v-model="queryForm.status" v-refresh-on-empty="loadRecords">
             <option value="">状态</option>
             <option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field device-page__keyword">
-          <input v-model="queryForm.keyword" type="text" placeholder="输入录像机名称、编码或 IP" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="输入录像机名称、编码或 IP" @clear="loadRecords" />
         </div>
         <template #actions>
           <button class="app-button app-button--primary device-page__button unified-list-page__button unified-list-page__search-button" @click="loadRecords">

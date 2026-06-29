@@ -195,19 +195,19 @@ onMounted(async () => {
     >
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
-          <select v-model="queryForm.channel">
+          <select v-model="queryForm.channel" v-refresh-on-empty="handleSearch">
             <option value="">渠道</option>
             <option v-for="item in channelOptions.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.status">
+          <select v-model="queryForm.status" v-refresh-on-empty="handleSearch">
             <option value="">状态</option>
             <option v-for="item in statusOptions.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.alarmType">
+          <select v-model="queryForm.alarmType" v-refresh-on-empty="handleSearch">
             <option value="">告警类型</option>
             <option v-for="item in alarmTypeOptions.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>

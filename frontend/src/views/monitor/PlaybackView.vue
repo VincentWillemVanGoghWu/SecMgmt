@@ -1835,10 +1835,9 @@ onMounted(async () => {
           <div class="camera-tree">
             <div class="camera-tree__filters">
               <div class="camera-tree__search-box">
-                <input
+                <ClearableSearchInput
                   v-model.trim="sourceKeyword"
                   class="camera-tree__search"
-                  type="text"
                   placeholder="搜索"
                 />
                 <el-icon class="camera-tree__search-icon"><Search /></el-icon>

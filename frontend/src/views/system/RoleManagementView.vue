@@ -687,10 +687,10 @@ onMounted(async () => {
       <PageCard class="role-page__filters-card unified-list-page__filters-card">
         <SearchForm class="unified-list-page__search-form">
           <div class="app-field role-page__keyword">
-            <input v-model="queryForm.keyword" type="text" placeholder="输入角色编码、角色名称或备注" />
+            <ClearableSearchInput v-model="queryForm.keyword" placeholder="输入角色编码、角色名称或备注" @clear="loadRoleRecords" />
           </div>
           <div class="app-field">
-            <select v-model="queryForm.status">
+            <select v-model="queryForm.status" v-refresh-on-empty="loadRoleRecords">
               <option value="">状态</option>
               <option v-for="item in statusOptions.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option>
             </select>
@@ -855,7 +855,7 @@ onMounted(async () => {
         />
         <div class="role-page__permission-toolbar">
           <div class="app-field role-page__permission-keyword">
-            <input v-model="permissionKeyword" type="text" placeholder="搜索菜单后的权限名称或权限码" />
+            <ClearableSearchInput v-model="permissionKeyword" placeholder="搜索菜单后的权限名称或权限码" />
           </div>
           <div class="role-page__permission-actions">
             <button class="app-button app-button--secondary" type="button" @click="handleSelectAllPermissions">全部勾选</button>

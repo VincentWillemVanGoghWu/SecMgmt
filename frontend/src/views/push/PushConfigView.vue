@@ -467,19 +467,19 @@ onMounted(async () => {
      >
       <SearchForm class="unified-list-page__search-form">
         <div class="app-field">
-          <select v-model="queryForm.enabled">
+          <select v-model="queryForm.enabled" v-refresh-on-empty="loadRecords">
             <option value="">状态</option>
             <option v-for="item in statusOptions.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field">
-          <select v-model="queryForm.providerType">
+          <select v-model="queryForm.providerType" v-refresh-on-empty="loadRecords">
             <option value="">渠道</option>
             <option v-for="item in providerOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </div>
         <div class="app-field push-page__keyword">
-          <input v-model="queryForm.keyword" type="text" placeholder="输入配置名称、Webhook、AppID 或模板ID" />
+          <ClearableSearchInput v-model="queryForm.keyword" placeholder="输入配置名称、Webhook、AppID 或模板ID" @clear="loadRecords" />
         </div>
         <template #actions>
           <button class="app-button app-button--primary push-page__button unified-list-page__button unified-list-page__search-button" @click="loadRecords">
