@@ -2322,6 +2322,9 @@ func (s *PlatformService) ListPushConfigs(filter PushConfigListFilter) ([]map[st
 }
 
 func (s *PlatformService) CreatePushConfig(payload PushConfigPayload, accessScope *AccessScope) (map[string]any, error) {
+	if err := normalizePushConfigPayload(&payload); err != nil {
+		return nil, err
+	}
 	if err := s.validatePushConfigScope(payload.FactoryIDs, payload.ZoneIDs, accessScope); err != nil {
 		return nil, err
 	}
@@ -2355,6 +2358,9 @@ func (s *PlatformService) CreatePushConfig(payload PushConfigPayload, accessScop
 func (s *PlatformService) UpdatePushConfig(id uint, payload PushConfigPayload, accessScope *AccessScope) (map[string]any, error) {
 	item, err := s.ensurePushConfigAccessible(id, accessScope)
 	if err != nil {
+		return nil, err
+	}
+	if err := normalizePushConfigPayload(&payload); err != nil {
 		return nil, err
 	}
 	if err := s.validatePushConfigScope(payload.FactoryIDs, payload.ZoneIDs, accessScope); err != nil {
@@ -2414,12 +2420,18 @@ func (s *PlatformService) TestPushConfig(id uint, accessScope *AccessScope) (map
 		return nil, err
 	}
 	now := time.Now()
-	if item.ProviderType == "wechat" {
-		result := deliverTestWechatPush(*item, now)
+	switch item.ProviderType {
+	case "wechat", "email":
+		var result pushDeliveryResult
+		if item.ProviderType == "wechat" {
+			result = deliverTestWechatPush(*item, now)
+		} else {
+			result = deliverTestEmailPush(s.cfg, *item, now)
+		}
 		logItem := entity.AlarmPushLog{
 			PushConfigID: &item.ID,
-			Channel:      "wechat",
-			ProviderType: "wechat",
+			Channel:      item.ProviderType,
+			ProviderType: item.ProviderType,
 			Status:       result.Status,
 			ConfigName:   item.ConfigName,
 			TriggeredBy:  "test",
@@ -4971,6 +4983,35 @@ func decodeJSONAny(raw string) any {
 		return raw
 	}
 	return value
+}
+
+func normalizePushConfigPayload(payload *PushConfigPayload) error {
+	if payload == nil {
+		return fmt.Errorf("推送配置参数无效")
+	}
+	payload.ConfigName = strings.TrimSpace(payload.ConfigName)
+	payload.ProviderType = strings.ToLower(strings.TrimSpace(payload.ProviderType))
+	if payload.ConfigName == "" {
+		return fmt.Errorf("配置名称不能为空")
+	}
+	switch payload.ProviderType {
+	case "dingtalk":
+		payload.AppID = nil
+		payload.AppSecret = nil
+		payload.TemplateID = nil
+	case "wechat":
+		payload.Webhook = nil
+		payload.Secret = nil
+	case "email":
+		payload.Webhook = nil
+		payload.Secret = nil
+		payload.AppID = nil
+		payload.AppSecret = nil
+		payload.TemplateID = nil
+	default:
+		return fmt.Errorf("不支持的推送渠道")
+	}
+	return nil
 }
 
 func containsString(values []string, target string) bool {

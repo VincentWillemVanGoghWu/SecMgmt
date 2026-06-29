@@ -2,14 +2,22 @@ package service
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
+	"mime"
+	"net"
 	"net/http"
+	"net/mail"
+	"net/smtp"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
+	"secmgmt_go/internal/config"
 	"secmgmt_go/internal/domain/entity"
 
 	"go.uber.org/zap"
@@ -55,16 +63,13 @@ type pushDeliveryResult struct {
 	ErrorMessage string
 }
 
-func dispatchAlarmPushes(db *gorm.DB, logger *zap.Logger, alarm entity.AlarmRecord, allowedChannels []string, triggeredBy string) {
+func dispatchAlarmPushes(db *gorm.DB, cfg *config.Config, logger *zap.Logger, alarm entity.AlarmRecord, allowedChannels []string, triggeredBy string) {
 	if db == nil {
-		return
-	}
-	if len(allowedChannels) > 0 && !containsStringFold(allowedChannels, "wechat") {
 		return
 	}
 
 	var configs []entity.PushConfig
-	if err := db.Where("enabled = ? AND provider_type = ?", true, "wechat").Find(&configs).Error; err != nil {
+	if err := db.Where("enabled = ? AND provider_type IN ?", true, []string{"wechat", "email"}).Find(&configs).Error; err != nil {
 		if logger != nil {
 			logger.Warn("load push configs failed", zap.Error(err), zap.Uint("alarmID", alarm.ID))
 		}
@@ -74,18 +79,36 @@ func dispatchAlarmPushes(db *gorm.DB, logger *zap.Logger, alarm entity.AlarmReco
 	now := time.Now()
 	ctx := resolveAlarmPushContext(db, alarm)
 	for _, config := range configs {
+		if len(allowedChannels) > 0 && !containsStringFold(allowedChannels, config.ProviderType) {
+			continue
+		}
 		if !pushConfigMatchesAlarm(config, alarm, now) {
 			continue
 		}
 		if isPushRateLimited(db, config, now) {
+			channelName := "推送"
+			switch strings.ToLower(strings.TrimSpace(config.ProviderType)) {
+			case "wechat":
+				channelName = "微信推送"
+			case "email":
+				channelName = "邮件推送"
+			}
 			createAlarmPushLog(db, alarm, config, triggeredBy, pushDeliveryResult{
 				Status:  "rate_limited",
-				Message: "触发限流，已跳过微信推送",
+				Message: "触发限流，已跳过" + channelName,
 			})
 			continue
 		}
 
-		result := deliverAlarmWechatPush(config, alarm, ctx)
+		var result pushDeliveryResult
+		switch strings.ToLower(strings.TrimSpace(config.ProviderType)) {
+		case "wechat":
+			result = deliverAlarmWechatPush(config, alarm, ctx)
+		case "email":
+			result = deliverAlarmEmailPush(cfg, config, alarm, ctx)
+		default:
+			continue
+		}
 		createAlarmPushLog(db, alarm, config, triggeredBy, result)
 	}
 }
@@ -101,6 +124,94 @@ func deliverTestWechatPush(config entity.PushConfig, now time.Time) pushDelivery
 		"thing5": {Value: trimWechatThingValue("测试通道")},
 		"const3": {Value: "中级告警"},
 	})
+}
+
+func deliverAlarmEmailPush(cfg *config.Config, config entity.PushConfig, alarm entity.AlarmRecord, ctx alarmPushContext) pushDeliveryResult {
+	subject := buildAlarmEmailSubject(alarm)
+	textBody := buildAlarmEmailTextBody(alarm, ctx)
+	htmlBody := buildAlarmEmailHTMLBody(alarm, ctx)
+	return deliverEmailPush(cfg, config, subject, textBody, htmlBody)
+}
+
+func deliverTestEmailPush(cfg *config.Config, config entity.PushConfig, now time.Time) pushDeliveryResult {
+	subject := "[测试推送] 安全管理平台邮件通道联通性验证"
+	textBody := strings.Join([]string{
+		"这是一封测试邮件，用于验证邮件推送配置是否可用。",
+		"",
+		"测试时间: " + now.Format("2006-01-02 15:04:05"),
+		"测试类型: 移动侦测",
+		"测试通道: 测试通道",
+		"测试等级: 中级告警",
+	}, "\n")
+	htmlBody := strings.Join([]string{
+		"<div style=\"font-family:Arial,'Microsoft YaHei',sans-serif;color:#1f2d3d;line-height:1.7\">",
+		"<h3 style=\"margin:0 0 12px\">邮件推送测试</h3>",
+		"<p>这是一封测试邮件，用于验证邮件推送配置是否可用。</p>",
+		"<table style=\"border-collapse:collapse\">",
+		fmt.Sprintf("<tr><td style=\"padding:4px 12px 4px 0;color:#6b7280\">测试时间</td><td>%s</td></tr>", html.EscapeString(now.Format("2006-01-02 15:04:05"))),
+		"<tr><td style=\"padding:4px 12px 4px 0;color:#6b7280\">测试类型</td><td>移动侦测</td></tr>",
+		"<tr><td style=\"padding:4px 12px 4px 0;color:#6b7280\">测试通道</td><td>测试通道</td></tr>",
+		"<tr><td style=\"padding:4px 12px 4px 0;color:#6b7280\">测试等级</td><td>中级告警</td></tr>",
+		"</table>",
+		"</div>",
+	}, "")
+	return deliverEmailPush(cfg, config, subject, textBody, htmlBody)
+}
+
+func deliverEmailPush(cfg *config.Config, config entity.PushConfig, subject, textBody, htmlBody string) pushDeliveryResult {
+	smtpHost, smtpPort, smtpUsername, smtpPassword, fromAddress, fromName, err := resolveEmailSenderConfig(cfg)
+	if err != nil {
+		detail := err.Error()
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("邮件推送配置不完整", detail),
+			ErrorMessage: detail,
+		}
+	}
+
+	recipients, err := resolveEmailRecipients(config.ReceiverOpenIDsJSON)
+	if err != nil {
+		detail := err.Error()
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("邮件接收人配置无效", detail),
+			ErrorMessage: detail,
+		}
+	}
+
+	requestBody := encodeJSON(map[string]any{
+		"from":    fromAddress,
+		"to":      recipients,
+		"subject": subject,
+		"html":    htmlBody,
+		"text":    textBody,
+	})
+	if strings.HasPrefix(strings.ToLower(smtpHost), "mock://email/") {
+		return pushDeliveryResult{
+			Status:       "success",
+			Message:      fmt.Sprintf("邮件模拟推送成功，共 %d 人", len(recipients)),
+			RequestBody:  requestBody,
+			ResponseBody: `{"mock":true,"message":"ok"}`,
+		}
+	}
+
+	rawMessage := buildEmailMessage(fromAddress, fromName, recipients, subject, textBody, htmlBody)
+	if err := sendSMTPMessage(smtpHost, smtpPort, smtpUsername, smtpPassword, fromAddress, recipients, rawMessage, smtpTimeout(cfg)); err != nil {
+		detail := err.Error()
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("邮件推送失败", detail),
+			RequestBody:  requestBody,
+			ErrorMessage: detail,
+		}
+	}
+
+	return pushDeliveryResult{
+		Status:       "success",
+		Message:      fmt.Sprintf("邮件推送成功，共 %d 人", len(recipients)),
+		RequestBody:  requestBody,
+		ResponseBody: `{"message":"ok"}`,
+	}
 }
 
 func deliverWechatTemplatePush(config entity.PushConfig, data map[string]wechatTemplateField) pushDeliveryResult {
@@ -542,4 +653,232 @@ func compactPushErrorDetail(detail string) string {
 		return detail
 	}
 	return string(runes[:180]) + "..."
+}
+
+func resolveEmailSenderConfig(cfg *config.Config) (string, int, string, string, string, string, error) {
+	if cfg == nil {
+		return "", 0, "", "", "", "", fmt.Errorf("未加载 .env 邮件配置")
+	}
+	smtpHost := strings.TrimSpace(cfg.PushEmailSMTPHost)
+	smtpPort := cfg.PushEmailSMTPPort
+	smtpUsername := strings.TrimSpace(cfg.PushEmailUsername)
+	smtpPassword := strings.TrimSpace(cfg.PushEmailPassword)
+	fromAddress := strings.TrimSpace(cfg.PushEmailFrom)
+	fromName := strings.TrimSpace(cfg.PushEmailFromName)
+	if fromAddress == "" {
+		fromAddress = smtpUsername
+	}
+	if smtpHost == "" {
+		return "", 0, "", "", "", "", fmt.Errorf("缺少 PUSH_EMAIL_SMTP_HOST")
+	}
+	if smtpPort <= 0 {
+		return "", 0, "", "", "", "", fmt.Errorf("缺少有效的 PUSH_EMAIL_SMTP_PORT")
+	}
+	if smtpUsername == "" {
+		return "", 0, "", "", "", "", fmt.Errorf("缺少 PUSH_EMAIL_SMTP_USERNAME")
+	}
+	if smtpPassword == "" {
+		return "", 0, "", "", "", "", fmt.Errorf("缺少 PUSH_EMAIL_SMTP_PASSWORD")
+	}
+	if fromAddress == "" {
+		return "", 0, "", "", "", "", fmt.Errorf("缺少 PUSH_EMAIL_FROM")
+	}
+	if _, err := mail.ParseAddress(fromAddress); err != nil {
+		return "", 0, "", "", "", "", fmt.Errorf("PUSH_EMAIL_FROM 格式无效: %w", err)
+	}
+	return smtpHost, smtpPort, smtpUsername, smtpPassword, fromAddress, fromName, nil
+}
+
+func resolveEmailRecipients(raw string) ([]string, error) {
+	values := decodeJSONStringSlice(raw)
+	if len(values) == 0 {
+		return nil, fmt.Errorf("未配置接收邮箱")
+	}
+	recipients := make([]string, 0, len(values))
+	for _, item := range values {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		address, err := mail.ParseAddress(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("邮箱地址 %q 格式无效", trimmed)
+		}
+		recipients = append(recipients, address.Address)
+	}
+	if len(recipients) == 0 {
+		return nil, fmt.Errorf("未配置有效的接收邮箱")
+	}
+	return recipients, nil
+}
+
+func buildAlarmEmailSubject(alarm entity.AlarmRecord) string {
+	level := strings.TrimSpace(formatWechatAlarmLevel(alarm.AlarmLevel))
+	if level == "" {
+		level = "告警"
+	}
+	alarmType := strings.TrimSpace(formatWechatAlarmType(alarm.AlarmType))
+	if alarmType == "" {
+		alarmType = "设备告警"
+	}
+	return fmt.Sprintf("[%s] %s", level, alarmType)
+}
+
+func buildAlarmEmailTextBody(alarm entity.AlarmRecord, ctx alarmPushContext) string {
+	lines := []string{
+		"安全管理平台检测到新的告警，请及时处理。",
+		"",
+		"告警编号: " + fallbackText(alarm.AlarmNo),
+		"告警时间: " + alarm.AlarmTime.Format("2006-01-02 15:04:05"),
+		"告警类型: " + formatWechatAlarmType(alarm.AlarmType),
+		"告警等级: " + fallbackText(formatWechatAlarmLevel(alarm.AlarmLevel)),
+		"关联通道: " + fallbackText(ctx.ChannelName),
+		"告警说明: " + fallbackText(alarm.Message),
+	}
+	if imageURL := strings.TrimSpace(alarm.ImageURL); imageURL != "" {
+		lines = append(lines, "告警图片: "+imageURL)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildAlarmEmailHTMLBody(alarm entity.AlarmRecord, ctx alarmPushContext) string {
+	rows := []string{
+		buildEmailTableRow("告警编号", html.EscapeString(fallbackText(alarm.AlarmNo))),
+		buildEmailTableRow("告警时间", html.EscapeString(alarm.AlarmTime.Format("2006-01-02 15:04:05"))),
+		buildEmailTableRow("告警类型", html.EscapeString(formatWechatAlarmType(alarm.AlarmType))),
+		buildEmailTableRow("告警等级", html.EscapeString(fallbackText(formatWechatAlarmLevel(alarm.AlarmLevel)))),
+		buildEmailTableRow("关联通道", html.EscapeString(fallbackText(ctx.ChannelName))),
+		buildEmailTableRow("告警说明", html.EscapeString(fallbackText(alarm.Message))),
+	}
+	if imageURL := strings.TrimSpace(alarm.ImageURL); imageURL != "" {
+		escapedURL := html.EscapeString(imageURL)
+		rows = append(rows, buildEmailTableRow("告警图片", fmt.Sprintf("<a href=\"%s\" target=\"_blank\">%s</a>", escapedURL, escapedURL)))
+		rows = append(rows, fmt.Sprintf(
+			"<div style=\"margin-top:16px\"><img src=\"%s\" alt=\"alarm-image\" style=\"max-width:100%%;border-radius:10px;border:1px solid #dbe4ee\" /></div>",
+			escapedURL,
+		))
+	}
+	return strings.Join([]string{
+		"<div style=\"font-family:Arial,'Microsoft YaHei',sans-serif;color:#1f2d3d;line-height:1.75\">",
+		"<h3 style=\"margin:0 0 12px;color:#17375e\">安全管理平台告警通知</h3>",
+		"<p style=\"margin:0 0 16px;color:#4b5f76\">系统检测到新的告警，请及时核查。</p>",
+		"<table style=\"border-collapse:collapse\">",
+		strings.Join(rows, ""),
+		"</table>",
+		"</div>",
+	}, "")
+}
+
+func buildEmailTableRow(label, value string) string {
+	return fmt.Sprintf(
+		"<tr><td style=\"padding:6px 14px 6px 0;color:#6b7280;vertical-align:top\">%s</td><td style=\"padding:6px 0\">%s</td></tr>",
+		html.EscapeString(label),
+		value,
+	)
+}
+
+func fallbackText(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "-"
+	}
+	return trimmed
+}
+
+func buildEmailMessage(fromAddress, fromName string, recipients []string, subject, textBody, htmlBody string) []byte {
+	boundary := fmt.Sprintf("secmgmt-boundary-%d", time.Now().UnixNano())
+	fromHeader := fromAddress
+	if strings.TrimSpace(fromName) != "" {
+		fromHeader = (&mail.Address{Name: fromName, Address: fromAddress}).String()
+	}
+	headers := []string{
+		"From: " + fromHeader,
+		"To: " + strings.Join(recipients, ", "),
+		"Subject: " + mime.BEncoding.Encode("UTF-8", subject),
+		"MIME-Version: 1.0",
+		"Date: " + time.Now().Format(time.RFC1123Z),
+		"Content-Type: multipart/alternative; boundary=\"" + boundary + "\"",
+		"",
+		"--" + boundary,
+		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Transfer-Encoding: 8bit",
+		"",
+		textBody,
+		"",
+		"--" + boundary,
+		"Content-Type: text/html; charset=UTF-8",
+		"Content-Transfer-Encoding: 8bit",
+		"",
+		htmlBody,
+		"",
+		"--" + boundary + "--",
+		"",
+	}
+	return []byte(strings.Join(headers, "\r\n"))
+}
+
+func sendSMTPMessage(host string, port int, username, password, from string, recipients []string, message []byte, timeout time.Duration) error {
+	address := net.JoinHostPort(host, strconv.Itoa(port))
+	dialer := &net.Dialer{Timeout: timeout}
+
+	var conn net.Conn
+	var err error
+	if port == 465 {
+		conn, err = tls.DialWithDialer(dialer, "tcp", address, &tls.Config{ServerName: host})
+	} else {
+		conn, err = dialer.Dial("tcp", address)
+	}
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	if port != 465 {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if err := client.StartTLS(&tls.Config{ServerName: host}); err != nil {
+				return err
+			}
+		}
+	}
+
+	if strings.TrimSpace(username) != "" {
+		auth := smtp.PlainAuth("", username, password, host)
+		if err := client.Auth(auth); err != nil {
+			return err
+		}
+	}
+
+	if err := client.Mail(from); err != nil {
+		return err
+	}
+	for _, recipient := range recipients {
+		if err := client.Rcpt(recipient); err != nil {
+			return err
+		}
+	}
+	writer, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := writer.Write(message); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	return client.Quit()
+}
+
+func smtpTimeout(cfg *config.Config) time.Duration {
+	if cfg == nil || cfg.PushHTTPTimeoutSeconds <= 0 {
+		return 10 * time.Second
+	}
+	return time.Duration(cfg.PushHTTPTimeoutSeconds) * time.Second
 }

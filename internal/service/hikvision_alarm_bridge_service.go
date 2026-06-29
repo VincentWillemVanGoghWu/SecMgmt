@@ -781,7 +781,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionAggregate(window *motionAggre
 		return err
 	}
 	if alarmToPush != nil {
-		dispatchAlarmPushes(s.repo.DB(), s.logger, *alarmToPush, pushChannels, "auto")
+		dispatchAlarmPushes(s.repo.DB(), s.cfg, s.logger, *alarmToPush, pushChannels, "auto")
 	}
 	return nil
 }
@@ -949,7 +949,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 		return err
 	}
 	if alarmToPush != nil {
-		dispatchAlarmPushes(s.repo.DB(), s.logger, *alarmToPush, pushChannels, "auto")
+		dispatchAlarmPushes(s.repo.DB(), s.cfg, s.logger, *alarmToPush, pushChannels, "auto")
 	}
 	return nil
 }

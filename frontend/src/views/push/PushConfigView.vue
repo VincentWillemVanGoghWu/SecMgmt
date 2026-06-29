@@ -21,7 +21,7 @@ import type { PushConfigRecord, PushConfigSubmitPayload } from "../../types/push
 
 interface PushConfigFormState {
   configName: string
-  providerType: "dingtalk" | "wechat"
+  providerType: "dingtalk" | "wechat" | "email"
   webhook: string
   secret: string
   appId: string
@@ -92,6 +92,7 @@ const statusOptions = [
 const providerOptions = [
   { label: "钉钉群机器人", value: "dingtalk" },
   { label: "微信公众号", value: "wechat" },
+  { label: "邮件推送", value: "email" },
 ]
 
 const alarmTypeOptions = [
@@ -168,8 +169,8 @@ const rules: FormRules<PushConfigFormState> = {
   receiverOpenIdsText: [
     {
       validator: (_, value, callback) => {
-        if (formState.providerType === "wechat" && !String(value || "").trim()) {
-          callback(new Error("请至少维护一个接收人 OpenID"))
+        if ((formState.providerType === "wechat" || formState.providerType === "email") && !String(value || "").trim()) {
+          callback(new Error(formState.providerType === "email" ? "请至少维护一个接收邮箱" : "请至少维护一个接收人 OpenID"))
           return
         }
         callback()
@@ -189,7 +190,7 @@ const filteredZoneOptions = computed(() => {
 const metrics = computed(() => [
   { label: "配置总数", value: records.value.length, accent: "primary" },
   { label: "启用配置", value: records.value.filter((item) => item.enabled).length, accent: "success" },
-  { label: "微信配置", value: records.value.filter((item) => item.providerType === "wechat").length, accent: "info" },
+  { label: "邮件配置", value: records.value.filter((item) => item.providerType === "email").length, accent: "info" },
   { label: "高危策略", value: records.value.filter((item) => item.alarmLevels.includes("critical") || item.alarmLevels.includes("high")).length, accent: "danger" },
 ])
 
@@ -213,10 +214,16 @@ const formatDateTime = (value?: string | null) => {
 
 const getEnabledText = (enabled: boolean) => (enabled ? "启用" : "停用")
 const getEnabledTone = (enabled: boolean) => (enabled ? "success" : "default")
-const getProviderText = (providerType: PushConfigRecord["providerType"]) =>
-  providerType === "wechat" ? "微信公众号" : "钉钉群机器人"
-const getProviderTone = (providerType: PushConfigRecord["providerType"]) =>
-  providerType === "wechat" ? "success" : "info"
+const getProviderText = (providerType: PushConfigRecord["providerType"]) => {
+  if (providerType === "wechat") return "微信公众号"
+  if (providerType === "email") return "邮件推送"
+  return "钉钉群机器人"
+}
+const getProviderTone = (providerType: PushConfigRecord["providerType"]) => {
+  if (providerType === "wechat") return "success"
+  if (providerType === "email") return "warning"
+  return "info"
+}
 
 const getFactoryNames = (ids: number[]) =>
   ids.length ? factories.value.filter((item) => ids.includes(item.id)).map((item) => item.factoryName).join(" / ") : "全部厂区"
@@ -241,12 +248,17 @@ const getCredentialText = (record: PushConfigRecord) => {
   if (record.providerType === "wechat") {
     return record.appSecretConfigured ? "已配置 AppSecret" : "未配置 AppSecret"
   }
+  if (record.providerType === "email") {
+    return "发件邮箱使用 .env 配置"
+  }
   return record.secretConfigured ? "已配置 Secret 加签" : "未配置 Secret"
 }
 
 const getReceiverText = (record: PushConfigRecord) => {
-  if (record.providerType === "wechat") {
-    return record.receiverOpenIds.length ? `已配置 ${record.receiverOpenIds.length} 个接收人` : "未配置接收人"
+  if (record.providerType === "wechat" || record.providerType === "email") {
+    return record.receiverOpenIds.length
+      ? `已配置 ${record.receiverOpenIds.length} 个${record.providerType === "email" ? "邮箱" : "接收人"}`
+      : `未配置${record.providerType === "email" ? "邮箱" : "接收人"}`
   }
   return record.webhook || "-"
 }
@@ -352,6 +364,14 @@ const handleProviderChange = (value: PushConfigFormState["providerType"]) => {
   }
   formState.webhook = ""
   formState.secret = ""
+  formState.receiverOpenIds = []
+  formState.receiverOpenIdsText = ""
+  if (value === "email") {
+    formState.appId = ""
+    formState.appSecret = ""
+    formState.templateId = ""
+    return
+  }
   if (!formState.appId) {
     formState.appId = "mock://wechat/success-app"
   }
@@ -366,7 +386,7 @@ const buildPayload = (): PushConfigSubmitPayload => {
     appId: formState.providerType === "wechat" ? formState.appId.trim() || null : null,
     appSecret: formState.providerType === "wechat" ? formState.appSecret.trim() || undefined : undefined,
     templateId: formState.providerType === "wechat" ? formState.templateId.trim() || null : null,
-    receiverOpenIds: formState.providerType === "wechat" ? receiverOpenIds : [],
+    receiverOpenIds: formState.providerType === "wechat" || formState.providerType === "email" ? receiverOpenIds : [],
     factoryIds: [...formState.factoryIds],
     zoneIds: [...formState.zoneIds],
     alarmTypes: [...formState.alarmTypes],
@@ -523,7 +543,7 @@ onMounted(async () => {
             <th>重试策略</th>
             <th>状态</th>
             <th>更新时间</th>
-            <th>操作</th>
+            <th class="push-page__actions-col">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -561,7 +581,7 @@ onMounted(async () => {
             <td>{{ record.retryMaxCount }} 次重试 / 间隔 {{ record.retryIntervalSeconds }} 秒</td>
             <td><StatusTag :text="getEnabledText(record.enabled)" :tone="getEnabledTone(record.enabled)" /></td>
             <td>{{ formatDateTime(record.updatedAt) }}</td>
-            <td>
+            <td class="push-page__actions-col">
               <div class="table-actions">
                 <button
                   v-permission="'push:config:update'"
@@ -643,12 +663,23 @@ onMounted(async () => {
         <el-form-item v-if="formState.providerType === 'wechat'" label="模板ID" prop="templateId">
           <el-input v-model="formState.templateId" placeholder="例如 tmpl-alarm-001" />
         </el-form-item>
+        <el-form-item v-if="formState.providerType === 'email'" label="发件配置">
+          <el-input model-value=".env 中的 PUSH_EMAIL_* 配置项" disabled />
+        </el-form-item>
         <el-form-item v-if="formState.providerType === 'wechat'" label="接收人 OpenID" prop="receiverOpenIdsText">
           <el-input
             v-model="formState.receiverOpenIdsText"
             type="textarea"
             :rows="3"
             placeholder="每行一个 OpenID，或用逗号分隔多个接收人"
+          />
+        </el-form-item>
+        <el-form-item v-if="formState.providerType === 'email'" label="接收邮箱" prop="receiverOpenIdsText">
+          <el-input
+            v-model="formState.receiverOpenIdsText"
+            type="textarea"
+            :rows="3"
+            placeholder="每行一个邮箱，或用逗号分隔多个接收邮箱"
           />
         </el-form-item>
         <el-form-item label="关联厂区">
@@ -702,7 +733,7 @@ onMounted(async () => {
             v-model="formState.remark"
             type="textarea"
             :rows="3"
-            :placeholder="formState.providerType === 'wechat' ? '记录模板用途、负责人和接收规则' : '记录值班群说明、机器人用途或值守策略'"
+            :placeholder="formState.providerType === 'wechat' ? '记录模板用途、负责人和接收规则' : formState.providerType === 'email' ? '记录邮件主题用途、收件范围与值守策略' : '记录值班群说明、机器人用途或值守策略'"
           />
         </el-form-item>
       </el-form>
@@ -824,6 +855,21 @@ onMounted(async () => {
   color: #708398;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.push-page__actions-col {
+  width: 320px;
+  min-width: 320px;
+}
+
+.push-page__actions-col .table-actions {
+  flex-wrap: nowrap;
+  min-width: 292px;
+}
+
+.push-page__table-button {
+  min-width: 64px;
+  white-space: nowrap;
 }
 
 .push-form {

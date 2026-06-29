@@ -6,7 +6,7 @@ export interface PushTimeRange {
 export interface PushConfigRecord {
   id: number
   configName: string
-  providerType: "dingtalk" | "wechat"
+  providerType: "dingtalk" | "wechat" | "email"
   webhook?: string | null
   appId?: string | null
   templateId?: string | null
@@ -30,7 +30,7 @@ export interface PushConfigRecord {
 
 export interface PushConfigSubmitPayload {
   configName: string
-  providerType: "dingtalk" | "wechat"
+  providerType: "dingtalk" | "wechat" | "email"
   webhook?: string | null
   appId?: string | null
   templateId?: string | null

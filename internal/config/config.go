@@ -27,6 +27,12 @@ type Config struct {
 	BackendPublicBaseURL   string
 	AICallbackSecret       string
 	PushHTTPTimeoutSeconds int
+	PushEmailSMTPHost      string
+	PushEmailSMTPPort      int
+	PushEmailUsername      string
+	PushEmailPassword      string
+	PushEmailFrom          string
+	PushEmailFromName      string
 }
 
 func Load(rootDir string) (*Config, error) {
@@ -51,6 +57,12 @@ func Load(rootDir string) (*Config, error) {
 		BackendPublicBaseURL:   readString("BACKEND_PUBLIC_BASE_URL", "http://127.0.0.1:8000"),
 		AICallbackSecret:       readString("AI_CALLBACK_SECRET", "change-ai-signature-secret"),
 		PushHTTPTimeoutSeconds: readInt("PUSH_HTTP_TIMEOUT_SECONDS", 10),
+		PushEmailSMTPHost:      readString("PUSH_EMAIL_SMTP_HOST", ""),
+		PushEmailSMTPPort:      readInt("PUSH_EMAIL_SMTP_PORT", 465),
+		PushEmailUsername:      readString("PUSH_EMAIL_SMTP_USERNAME", ""),
+		PushEmailPassword:      readString("PUSH_EMAIL_SMTP_PASSWORD", ""),
+		PushEmailFrom:          readString("PUSH_EMAIL_FROM", ""),
+		PushEmailFromName:      readString("PUSH_EMAIL_FROM_NAME", ""),
 	}
 
 	if strings.TrimSpace(cfg.MySQLDSN) == "" {
