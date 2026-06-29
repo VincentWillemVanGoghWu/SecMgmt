@@ -533,15 +533,15 @@ onMounted(async () => {
       <table class="app-table unified-list-page__table">
         <thead>
           <tr>
-            <th>配置名称</th>
-            <th>渠道</th>
-            <th>凭证/接收人</th>
-            <th>厂区 / 区域</th>
+            <th style="width: 160px">配置名称</th>
+            <th style="width: 120px">渠道</th>
+            <th style="width: 200px">凭证/接收人</th>
+            <th style="width: 120px">厂区 / 区域</th>
             <th>告警类型 / 等级</th>
             <th>生效时段</th>
             <th>限流规则</th>
             <th>重试策略</th>
-            <th>状态</th>
+            <th style="width: 80px">状态</th>
             <th>更新时间</th>
             <th class="push-page__actions-col">操作</th>
           </tr>
