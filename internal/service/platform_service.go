@@ -2421,9 +2421,11 @@ func (s *PlatformService) TestPushConfig(id uint, accessScope *AccessScope) (map
 	}
 	now := time.Now()
 	switch item.ProviderType {
-	case "wechat", "email":
+	case "dingtalk", "wechat", "email":
 		var result pushDeliveryResult
-		if item.ProviderType == "wechat" {
+		if item.ProviderType == "dingtalk" {
+			result = deliverTestDingtalkPush(*item, now)
+		} else if item.ProviderType == "wechat" {
 			result = deliverTestWechatPush(*item, now)
 		} else {
 			result = deliverTestEmailPush(s.cfg, *item, now)
@@ -3133,7 +3135,7 @@ func (s *PlatformService) GetSmartBindingDetail(id uint) (map[string]any, error)
 }
 
 func (s *PlatformService) CreateSmartBindingRule(bindingID uint, payload SmartBindingRulePayload) (map[string]any, error) {
-	pushChannels := normalizePushChannels(payload.PushChannels)
+	pushChannels := normalizePushConfigSelectors(payload.PushChannels)
 	item := entity.SmartBindingRule{
 		BindingID:             bindingID,
 		RuleName:              payload.RuleName,
@@ -3166,7 +3168,7 @@ func (s *PlatformService) UpdateSmartBindingRule(ruleID uint, payload SmartBindi
 	if err := s.db().First(&item, ruleID).Error; err != nil {
 		return nil, err
 	}
-	pushChannels := normalizePushChannels(payload.PushChannels)
+	pushChannels := normalizePushConfigSelectors(payload.PushChannels)
 	item.RuleName = payload.RuleName
 	item.Enabled = payload.Enabled
 	item.AlarmEnabled = payload.AlarmEnabled
@@ -5016,14 +5018,15 @@ func normalizePushConfigPayload(payload *PushConfigPayload) error {
 	return nil
 }
 
-func normalizePushChannels(values []string) []string {
+func normalizePushConfigSelectors(values []string) []string {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		normalized := normalizePushChannel(value)
-		if normalized == "" {
+		id, ok := parsePushConfigSelector(value)
+		if !ok {
 			continue
 		}
+		normalized := fmt.Sprintf("push-config:%d", id)
 		if _, ok := seen[normalized]; ok {
 			continue
 		}

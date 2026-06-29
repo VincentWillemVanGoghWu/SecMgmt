@@ -8,6 +8,7 @@ import SearchForm from '../../components/common/SearchForm.vue'
 import StatusTag from '../../components/common/StatusTag.vue'
 import { listCamerasApi } from '../../api/camera'
 import { listFactoriesApi, listZonesApi } from '../../api/master-data'
+import { listPushConfigsApi } from '../../api/push'
 import { listChannelsApi, listRecordersApi } from '../../api/recorder'
 import {
   createSmartBindingApi,
@@ -31,6 +32,7 @@ import {
 import type { CameraRecord } from '../../types/camera'
 import type { FactoryRecord, ZoneRecord } from '../../types/master-data'
 import type { RecorderChannelRecord, RecorderRecord } from '../../types/recorder'
+import type { PushConfigRecord } from '../../types/push'
 import type {
   SmartAiTaskRecord,
   SmartBindingDetailRecord,
@@ -73,6 +75,7 @@ const zones = ref<ZoneRecord[]>([])
 const cameras = ref<CameraRecord[]>([])
 const recorders = ref<RecorderRecord[]>([])
 const channels = ref<RecorderChannelRecord[]>([])
+const pushConfigs = ref<PushConfigRecord[]>([])
 
 const providerDialogVisible = ref(false)
 const bindingDialogVisible = ref(false)
@@ -165,10 +168,7 @@ const enabledOptions = [
   { label: '停用', value: 'false' },
 ]
 
-const pushChannelOptions = [
-  { label: '邮件', value: 'email' },
-  { label: '微信', value: 'wechat' },
-]
+const pushConfigOptionValue = (id: number) => `push-config:${id}`
 
 const sourceTypeOptions = [
   { label: '摄像机', value: 'camera' },
@@ -294,6 +294,26 @@ const parseJsonText = (value: string, fallbackMessage: string) => {
 const getEnabledText = (enabled: boolean) => (enabled ? '启用' : '停用')
 const getEnabledTone = (enabled: boolean) => (enabled ? 'success' : 'default')
 const getProviderTypeText = (value: string) => providerTypeOptions.find((item) => item.value === value)?.label ?? value
+const formatPushProviderType = (value: string) => {
+  switch (value) {
+    case 'email':
+      return '邮件'
+    case 'wechat':
+      return '微信'
+    case 'dingtalk':
+      return '钉钉'
+    default:
+      return value
+  }
+}
+const pushConfigOptions = computed(() =>
+  pushConfigs.value
+    .map((item) => ({
+      label: `${item.configName}（${formatPushProviderType(item.providerType)}${item.enabled ? '' : '，停用'}）`,
+      value: pushConfigOptionValue(item.id),
+      disabled: !item.enabled,
+    })),
+)
 const getSourceTypeText = (value: string) => sourceTypeOptions.find((item) => item.value === value)?.label ?? value
 const getEventLevelTone = (value: string) => levelToneMap[value] ?? 'info'
 const getEventStatusTone = (value: string) => eventStatusMetaMap[value]?.tone ?? 'info'
@@ -320,18 +340,20 @@ const getDefaultConnectionConfigText = (sourceType: string) => {
 }
 
 const loadFormOptions = async () => {
-  const [factoryList, zoneList, cameraList, recorderList, channelList] = await Promise.all([
+  const [factoryList, zoneList, cameraList, recorderList, channelList, pushConfigList] = await Promise.all([
     listFactoriesApi(),
     listZonesApi(),
     listCamerasApi(),
     listRecordersApi(),
     listChannelsApi(),
+    listPushConfigsApi(),
   ])
   factories.value = factoryList
   zones.value = zoneList
   cameras.value = cameraList
   recorders.value = recorderList
   channels.value = channelList
+  pushConfigs.value = pushConfigList
   formOptionsLoaded.value = true
 }
 
@@ -468,6 +490,9 @@ const resetRuleForm = () => {
   ruleForm.generateAlarmDirectly = true
   ruleForm.remark = ''
 }
+
+const normalizeRulePushConfigSelections = (values: string[]) =>
+  values.filter((value) => value.trim().toLowerCase().startsWith('push-config:'))
 
 const openCreateProviderDialog = () => {
   resetProviderForm()
@@ -698,37 +723,47 @@ const openBindingDetail = async (record: SmartBindingRecord) => {
   }
 }
 
-const openCreateRuleDialog = () => {
+const openCreateRuleDialog = async () => {
   if (!bindingDetail.value) return
-  resetRuleForm()
-  currentRuleBindingId.value = bindingDetail.value.id
-  ruleForm.ruleName = `${bindingDetail.value.capabilityName}规则`
-  ruleForm.sendToAi = bindingDetail.value.sendToAi
-  ruleForm.generateAlarmDirectly = bindingDetail.value.generateAlarmDirectly
-  ruleDialogVisible.value = true
+  try {
+    await ensureFormOptionsLoaded()
+    resetRuleForm()
+    currentRuleBindingId.value = bindingDetail.value.id
+    ruleForm.ruleName = `${bindingDetail.value.capabilityName}规则`
+    ruleForm.sendToAi = bindingDetail.value.sendToAi
+    ruleForm.generateAlarmDirectly = bindingDetail.value.generateAlarmDirectly
+    ruleDialogVisible.value = true
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '加载推送配置失败'))
+  }
 }
 
-const openEditRuleDialog = (rule: SmartBindingRuleRecord) => {
-  editingRuleId.value = rule.id
-  currentRuleBindingId.value = rule.bindingId
-  ruleForm.ruleName = rule.ruleName
-  ruleForm.enabled = rule.enabled
-  ruleForm.alarmEnabled = rule.alarmEnabled
-  ruleForm.alarmLevel = rule.alarmLevel
-  ruleForm.dedupWindowSeconds = rule.dedupWindowSeconds
-  ruleForm.cooldownSeconds = rule.cooldownSeconds
-  ruleForm.minConfidence = rule.minConfidence == null ? '' : String(rule.minConfidence)
-  ruleForm.snapshotEnabled = rule.snapshotEnabled
-  ruleForm.recordClipEnabled = rule.recordClipEnabled
-  ruleForm.recordPreSeconds = rule.recordPreSeconds
-  ruleForm.recordPostSeconds = rule.recordPostSeconds
-  ruleForm.pushEnabled = rule.pushEnabled
-  ruleForm.pushChannels = [...rule.pushChannels]
-  ruleForm.sendToAi = rule.sendToAi
-  ruleForm.aiFlowCode = rule.aiFlowCode ?? ''
-  ruleForm.generateAlarmDirectly = rule.generateAlarmDirectly
-  ruleForm.remark = rule.remark ?? ''
-  ruleDialogVisible.value = true
+const openEditRuleDialog = async (rule: SmartBindingRuleRecord) => {
+  try {
+    await ensureFormOptionsLoaded()
+    editingRuleId.value = rule.id
+    currentRuleBindingId.value = rule.bindingId
+    ruleForm.ruleName = rule.ruleName
+    ruleForm.enabled = rule.enabled
+    ruleForm.alarmEnabled = rule.alarmEnabled
+    ruleForm.alarmLevel = rule.alarmLevel
+    ruleForm.dedupWindowSeconds = rule.dedupWindowSeconds
+    ruleForm.cooldownSeconds = rule.cooldownSeconds
+    ruleForm.minConfidence = rule.minConfidence == null ? '' : String(rule.minConfidence)
+    ruleForm.snapshotEnabled = rule.snapshotEnabled
+    ruleForm.recordClipEnabled = rule.recordClipEnabled
+    ruleForm.recordPreSeconds = rule.recordPreSeconds
+    ruleForm.recordPostSeconds = rule.recordPostSeconds
+    ruleForm.pushEnabled = rule.pushEnabled
+    ruleForm.pushChannels = normalizeRulePushConfigSelections(rule.pushChannels)
+    ruleForm.sendToAi = rule.sendToAi
+    ruleForm.aiFlowCode = rule.aiFlowCode ?? ''
+    ruleForm.generateAlarmDirectly = rule.generateAlarmDirectly
+    ruleForm.remark = rule.remark ?? ''
+    ruleDialogVisible.value = true
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '加载推送配置失败'))
+  }
 }
 
 const submitRule = async () => {
@@ -736,6 +771,7 @@ const submitRule = async () => {
   ruleSubmitting.value = true
   try {
     if (!ruleForm.ruleName.trim()) throw new Error('请输入规则名称')
+    if (ruleForm.pushEnabled && ruleForm.pushChannels.length === 0) throw new Error('请选择推送配置')
     const payload = {
       ruleName: ruleForm.ruleName.trim(),
       enabled: ruleForm.enabled,
@@ -1374,9 +1410,15 @@ onMounted(async () => {
           <input v-model="ruleForm.aiFlowCode" type="text" placeholder="可选，如 motion-review-v1" />
         </div>
         <div class="app-field smart-interface-page__full-row">
-          <label>推送渠道</label>
-          <el-select v-model="ruleForm.pushChannels" multiple clearable placeholder="请选择推送渠道" style="width: 100%">
-            <el-option v-for="item in pushChannelOptions" :key="item.value" :label="item.label" :value="item.value" />
+          <label>推送配置</label>
+          <el-select v-model="ruleForm.pushChannels" multiple clearable placeholder="请选择推送配置" style="width: 100%">
+            <el-option
+              v-for="item in pushConfigOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+              :disabled="item.disabled"
+            />
           </el-select>
         </div>
         <div class="app-field smart-interface-page__full-row">

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"secmgmt_go/internal/config"
+	"secmgmt_go/internal/domain/entity"
 )
 
 func TestResolveEmailSenderConfigUsesDefaults(t *testing.T) {
@@ -31,19 +32,24 @@ func TestResolveEmailSenderConfigUsesDefaults(t *testing.T) {
 	}
 }
 
-func TestPushChannelAllowedNormalizesEmailAliases(t *testing.T) {
-	allowed := []string{"邮件", "wechat"}
-	if !pushChannelAllowed(allowed, "email") {
-		t.Fatal("expected 邮件 to allow email")
+func TestPushConfigAllowedMatchesSelectedConfigID(t *testing.T) {
+	emailConfig := entity.PushConfig{ID: 7, ProviderType: "email"}
+	wechatConfig := entity.PushConfig{ID: 8, ProviderType: "wechat"}
+
+	if !pushConfigAllowed([]string{"push-config:7"}, emailConfig) {
+		t.Fatal("expected selected push config id to be allowed")
 	}
-	if !pushChannelAllowed([]string{"mail"}, "email") {
-		t.Fatal("expected mail to allow email")
+	if pushConfigAllowed([]string{"push-config:7"}, wechatConfig) {
+		t.Fatal("expected unselected push config id to be skipped")
+	}
+	if pushConfigAllowed([]string{"email"}, emailConfig) {
+		t.Fatal("expected legacy email channel selector to be skipped")
 	}
 }
 
-func TestNormalizePushChannels(t *testing.T) {
-	got := normalizePushChannels([]string{"邮件", " mail ", "wechat", "微信", ""})
-	want := []string{"email", "wechat"}
+func TestNormalizePushConfigSelectors(t *testing.T) {
+	got := normalizePushConfigSelectors([]string{"邮件", "push-config:7", "config:8", "email", "push-config:7", ""})
+	want := []string{"push-config:7", "push-config:8"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
 	}

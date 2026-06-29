@@ -2,6 +2,8 @@ package service
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -80,7 +82,7 @@ func dispatchAlarmPushes(db *gorm.DB, cfg *config.Config, logger *zap.Logger, al
 	}
 
 	var configs []entity.PushConfig
-	if err := db.Where("enabled = ? AND provider_type IN ?", true, []string{"wechat", "email"}).Find(&configs).Error; err != nil {
+	if err := db.Where("enabled = ? AND provider_type IN ?", true, []string{"dingtalk", "wechat", "email"}).Find(&configs).Error; err != nil {
 		if logger != nil {
 			logger.Warn("load push configs failed", zap.Error(err), zap.Uint("alarmID", alarm.ID))
 		}
@@ -90,7 +92,7 @@ func dispatchAlarmPushes(db *gorm.DB, cfg *config.Config, logger *zap.Logger, al
 	now := time.Now()
 	ctx := resolveAlarmPushContext(db, alarm)
 	for _, config := range configs {
-		if len(allowedChannels) > 0 && !pushChannelAllowed(allowedChannels, config.ProviderType) {
+		if len(allowedChannels) > 0 && !pushConfigAllowed(allowedChannels, config) {
 			continue
 		}
 		if !pushConfigMatchesAlarm(config, alarm, now) {
@@ -99,6 +101,8 @@ func dispatchAlarmPushes(db *gorm.DB, cfg *config.Config, logger *zap.Logger, al
 		if isPushRateLimited(db, config, now) {
 			channelName := "推送"
 			switch strings.ToLower(strings.TrimSpace(config.ProviderType)) {
+			case "dingtalk":
+				channelName = "钉钉推送"
 			case "wechat":
 				channelName = "微信推送"
 			case "email":
@@ -113,6 +117,8 @@ func dispatchAlarmPushes(db *gorm.DB, cfg *config.Config, logger *zap.Logger, al
 
 		var result pushDeliveryResult
 		switch strings.ToLower(strings.TrimSpace(config.ProviderType)) {
+		case "dingtalk":
+			result = deliverAlarmDingtalkPush(config, alarm, ctx)
 		case "wechat":
 			result = deliverAlarmWechatPush(config, alarm, ctx)
 		case "email":
@@ -128,6 +134,18 @@ func deliverAlarmWechatPush(config entity.PushConfig, alarm entity.AlarmRecord, 
 	return deliverWechatTemplatePush(config, buildAlarmWechatTemplateData(alarm, ctx))
 }
 
+func deliverAlarmDingtalkPush(config entity.PushConfig, alarm entity.AlarmRecord, ctx alarmPushContext) pushDeliveryResult {
+	content := strings.Join([]string{
+		"安全管理平台告警通知",
+		"告警编号: " + fallbackText(alarm.AlarmNo),
+		"告警时间: " + alarm.AlarmTime.Format("2006-01-02 15:04:05"),
+		"告警类型: " + formatWechatAlarmType(alarm.AlarmType),
+		"告警等级: " + fallbackText(formatWechatAlarmLevel(alarm.AlarmLevel)),
+		"关联通道: " + fallbackText(ctx.ChannelName),
+	}, "\n")
+	return deliverDingtalkTextPush(config, content)
+}
+
 func deliverTestWechatPush(config entity.PushConfig, now time.Time) pushDeliveryResult {
 	return deliverWechatTemplatePush(config, map[string]wechatTemplateField{
 		"time1":  {Value: now.Format("2006-01-02 15:04:05")},
@@ -135,6 +153,17 @@ func deliverTestWechatPush(config entity.PushConfig, now time.Time) pushDelivery
 		"thing5": {Value: trimWechatThingValue("测试通道")},
 		"const3": {Value: "中级告警"},
 	})
+}
+
+func deliverTestDingtalkPush(config entity.PushConfig, now time.Time) pushDeliveryResult {
+	content := strings.Join([]string{
+		"安全管理平台测试推送",
+		"测试时间: " + now.Format("2006-01-02 15:04:05"),
+		"测试类型: 移动侦测",
+		"测试通道: 测试通道",
+		"测试等级: 中级告警",
+	}, "\n")
+	return deliverDingtalkTextPush(config, content)
 }
 
 func deliverAlarmEmailPush(cfg *config.Config, config entity.PushConfig, alarm entity.AlarmRecord, ctx alarmPushContext) pushDeliveryResult {
@@ -176,6 +205,86 @@ func deliverTestEmailPush(cfg *config.Config, config entity.PushConfig, now time
 		"</div>",
 	}, "")
 	return deliverEmailPush(cfg, config, subject, textBody, htmlBody, nil)
+}
+
+func deliverDingtalkTextPush(config entity.PushConfig, content string) pushDeliveryResult {
+	webhook := strings.TrimSpace(config.Webhook)
+	if webhook == "" {
+		detail := "缺少 Webhook"
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("钉钉推送配置不完整", detail),
+			ErrorMessage: detail,
+		}
+	}
+	payload := map[string]any{
+		"msgtype": "text",
+		"text": map[string]string{
+			"content": content,
+		},
+	}
+	requestBody := encodeJSON(payload)
+	if strings.HasPrefix(strings.ToLower(webhook), "mock://dingtalk/") {
+		return pushDeliveryResult{
+			Status:       "success",
+			Message:      "钉钉模拟推送成功",
+			RequestBody:  requestBody,
+			ResponseBody: `{"mock":true,"errcode":0,"errmsg":"ok"}`,
+		}
+	}
+	signedWebhook, err := signDingtalkWebhook(webhook, config.SecretEncrypted, time.Now())
+	if err != nil {
+		detail := err.Error()
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("钉钉 Webhook 地址无效", detail),
+			RequestBody:  requestBody,
+			ErrorMessage: detail,
+		}
+	}
+	req, err := http.NewRequest(http.MethodPost, signedWebhook, strings.NewReader(requestBody))
+	if err != nil {
+		detail := err.Error()
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("钉钉推送请求创建失败", detail),
+			RequestBody:  requestBody,
+			ErrorMessage: detail,
+		}
+	}
+	req.Header.Set("Content-Type", "application/json;charset=utf-8")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		detail := err.Error()
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("钉钉推送失败", detail),
+			RequestBody:  requestBody,
+			ErrorMessage: detail,
+		}
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	responseBody := string(body)
+	if readErr != nil {
+		responseBody = readErr.Error()
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !dingtalkResponseOK(responseBody) {
+		detail := fmt.Sprintf("status=%d, body=%s", resp.StatusCode, compactPushErrorDetail(responseBody))
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("钉钉推送失败", detail),
+			RequestBody:  requestBody,
+			ResponseBody: responseBody,
+			ErrorMessage: detail,
+		}
+	}
+	return pushDeliveryResult{
+		Status:       "success",
+		Message:      "钉钉推送成功",
+		RequestBody:  requestBody,
+		ResponseBody: responseBody,
+	}
 }
 
 func deliverEmailPush(cfg *config.Config, config entity.PushConfig, subject, textBody, htmlBody string, attachments []emailAttachment) pushDeliveryResult {
@@ -233,6 +342,42 @@ func deliverEmailPush(cfg *config.Config, config entity.PushConfig, subject, tex
 		RequestBody:  requestBody,
 		ResponseBody: `{"message":"ok"}`,
 	}
+}
+
+func signDingtalkWebhook(webhook, secret string, now time.Time) (string, error) {
+	parsedURL, err := url.Parse(strings.TrimSpace(webhook))
+	if err != nil {
+		return "", err
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return parsedURL.String(), nil
+	}
+	timestamp := now.UnixMilli()
+	stringToSign := fmt.Sprintf("%d\n%s", timestamp, secret)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(stringToSign))
+	sign := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	query := parsedURL.Query()
+	query.Set("timestamp", strconv.FormatInt(timestamp, 10))
+	query.Set("sign", sign)
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
+}
+
+func dingtalkResponseOK(body string) bool {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return true
+	}
+	var parsed struct {
+		ErrCode int64  `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return false
+	}
+	return parsed.ErrCode == 0
 }
 
 func deliverWechatTemplatePush(config entity.PushConfig, data map[string]wechatTemplateField) pushDeliveryResult {
@@ -632,36 +777,27 @@ func containsUint(values []uint, target uint) bool {
 	return false
 }
 
-func containsStringFold(values []string, target string) bool {
+func pushConfigAllowed(values []string, config entity.PushConfig) bool {
 	for _, value := range values {
-		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(target)) {
+		if id, ok := parsePushConfigSelector(value); ok && id == config.ID {
 			return true
 		}
 	}
 	return false
 }
 
-func pushChannelAllowed(values []string, target string) bool {
-	normalizedTarget := normalizePushChannel(target)
-	for _, value := range values {
-		if normalizePushChannel(value) == normalizedTarget {
-			return true
+func parsePushConfigSelector(value string) (uint, bool) {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	for _, prefix := range []string{"push-config:", "push_config:", "config:"} {
+		if strings.HasPrefix(normalized, prefix) {
+			id, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(normalized, prefix)), 10, 64)
+			if err != nil || id == 0 {
+				return 0, false
+			}
+			return uint(id), true
 		}
 	}
-	return false
-}
-
-func normalizePushChannel(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "email", "mail", "smtp", "邮件", "邮箱":
-		return "email"
-	case "wechat", "weixin", "微信":
-		return "wechat"
-	case "dingtalk", "dingding", "钉钉":
-		return "dingtalk"
-	default:
-		return strings.ToLower(strings.TrimSpace(value))
-	}
+	return 0, false
 }
 
 func buildPushFailureMessage(summary, detail string) string {
@@ -788,17 +924,11 @@ func buildAlarmEmailSubject(alarm entity.AlarmRecord) string {
 
 func buildAlarmEmailTextBody(alarm entity.AlarmRecord, ctx alarmPushContext) string {
 	lines := []string{
-		"安全管理平台检测到新的告警，请及时处理。",
-		"",
 		"告警编号: " + fallbackText(alarm.AlarmNo),
 		"告警时间: " + alarm.AlarmTime.Format("2006-01-02 15:04:05"),
 		"告警类型: " + formatWechatAlarmType(alarm.AlarmType),
 		"告警等级: " + fallbackText(formatWechatAlarmLevel(alarm.AlarmLevel)),
 		"关联通道: " + fallbackText(ctx.ChannelName),
-		"告警说明: " + fallbackText(alarm.Message),
-	}
-	if imageURL := strings.TrimSpace(alarm.ImageURL); imageURL != "" {
-		lines = append(lines, "告警图片: "+imageURL)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -810,20 +940,9 @@ func buildAlarmEmailHTMLBody(alarm entity.AlarmRecord, ctx alarmPushContext) str
 		buildEmailTableRow("告警类型", html.EscapeString(formatWechatAlarmType(alarm.AlarmType))),
 		buildEmailTableRow("告警等级", html.EscapeString(fallbackText(formatWechatAlarmLevel(alarm.AlarmLevel)))),
 		buildEmailTableRow("关联通道", html.EscapeString(fallbackText(ctx.ChannelName))),
-		buildEmailTableRow("告警说明", html.EscapeString(fallbackText(alarm.Message))),
-	}
-	if imageURL := strings.TrimSpace(alarm.ImageURL); imageURL != "" {
-		escapedURL := html.EscapeString(imageURL)
-		rows = append(rows, buildEmailTableRow("告警图片", fmt.Sprintf("<a href=\"%s\" target=\"_blank\">%s</a>", escapedURL, escapedURL)))
-		rows = append(rows, fmt.Sprintf(
-			"<div style=\"margin-top:16px\"><img src=\"%s\" alt=\"alarm-image\" style=\"max-width:100%%;border-radius:10px;border:1px solid #dbe4ee\" /></div>",
-			escapedURL,
-		))
 	}
 	return strings.Join([]string{
 		"<div style=\"font-family:Arial,'Microsoft YaHei',sans-serif;color:#1f2d3d;line-height:1.75\">",
-		"<h3 style=\"margin:0 0 12px;color:#17375e\">安全管理平台告警通知</h3>",
-		"<p style=\"margin:0 0 16px;color:#4b5f76\">系统检测到新的告警，请及时核查。</p>",
 		"<table style=\"border-collapse:collapse\">",
 		strings.Join(rows, ""),
 		"</table>",
