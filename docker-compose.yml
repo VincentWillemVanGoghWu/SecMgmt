@@ -39,6 +39,7 @@ services:
       GIN_MODE: release
       LD_LIBRARY_PATH: /app/third_party/HCNetSDK_Linux64/Library:/app/third_party/HCNetSDK_Linux64/Library/HCNetSDKCom
     volumes:
+      - ${BACKEND_ENV_FILE}:/app/.env:ro
       - ${MEDIA_DIR}:/app/media
     ports:
       - 127.0.0.1:${BACKEND_PORT}:8000

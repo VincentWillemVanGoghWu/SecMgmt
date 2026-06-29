@@ -3,16 +3,21 @@ package service
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +66,12 @@ type pushDeliveryResult struct {
 	RequestBody  string
 	ResponseBody string
 	ErrorMessage string
+}
+
+type emailAttachment struct {
+	Filename    string
+	ContentType string
+	Content     []byte
 }
 
 func dispatchAlarmPushes(db *gorm.DB, cfg *config.Config, logger *zap.Logger, alarm entity.AlarmRecord, allowedChannels []string, triggeredBy string) {
@@ -130,7 +141,16 @@ func deliverAlarmEmailPush(cfg *config.Config, config entity.PushConfig, alarm e
 	subject := buildAlarmEmailSubject(alarm)
 	textBody := buildAlarmEmailTextBody(alarm, ctx)
 	htmlBody := buildAlarmEmailHTMLBody(alarm, ctx)
-	return deliverEmailPush(cfg, config, subject, textBody, htmlBody)
+	attachments, err := resolveAlarmEmailAttachments(cfg, alarm)
+	if err != nil {
+		detail := err.Error()
+		return pushDeliveryResult{
+			Status:       "failed",
+			Message:      buildPushFailureMessage("邮件附件准备失败", detail),
+			ErrorMessage: detail,
+		}
+	}
+	return deliverEmailPush(cfg, config, subject, textBody, htmlBody, attachments)
 }
 
 func deliverTestEmailPush(cfg *config.Config, config entity.PushConfig, now time.Time) pushDeliveryResult {
@@ -155,10 +175,10 @@ func deliverTestEmailPush(cfg *config.Config, config entity.PushConfig, now time
 		"</table>",
 		"</div>",
 	}, "")
-	return deliverEmailPush(cfg, config, subject, textBody, htmlBody)
+	return deliverEmailPush(cfg, config, subject, textBody, htmlBody, nil)
 }
 
-func deliverEmailPush(cfg *config.Config, config entity.PushConfig, subject, textBody, htmlBody string) pushDeliveryResult {
+func deliverEmailPush(cfg *config.Config, config entity.PushConfig, subject, textBody, htmlBody string, attachments []emailAttachment) pushDeliveryResult {
 	smtpHost, smtpPort, smtpUsername, smtpPassword, fromAddress, fromName, err := resolveEmailSenderConfig(cfg)
 	if err != nil {
 		detail := err.Error()
@@ -180,11 +200,12 @@ func deliverEmailPush(cfg *config.Config, config entity.PushConfig, subject, tex
 	}
 
 	requestBody := encodeJSON(map[string]any{
-		"from":    fromAddress,
-		"to":      recipients,
-		"subject": subject,
-		"html":    htmlBody,
-		"text":    textBody,
+		"from":        fromAddress,
+		"to":          recipients,
+		"subject":     subject,
+		"html":        htmlBody,
+		"text":        textBody,
+		"attachments": summarizeEmailAttachments(attachments),
 	})
 	if strings.HasPrefix(strings.ToLower(smtpHost), "mock://email/") {
 		return pushDeliveryResult{
@@ -195,7 +216,7 @@ func deliverEmailPush(cfg *config.Config, config entity.PushConfig, subject, tex
 		}
 	}
 
-	rawMessage := buildEmailMessage(fromAddress, fromName, recipients, subject, textBody, htmlBody)
+	rawMessage := buildEmailMessage(fromAddress, fromName, recipients, subject, textBody, htmlBody, attachments)
 	if err := sendSMTPMessage(smtpHost, smtpPort, smtpUsername, smtpPassword, fromAddress, recipients, rawMessage, smtpTimeout(cfg)); err != nil {
 		detail := err.Error()
 		return pushDeliveryResult{
@@ -785,36 +806,63 @@ func fallbackText(value string) string {
 	return trimmed
 }
 
-func buildEmailMessage(fromAddress, fromName string, recipients []string, subject, textBody, htmlBody string) []byte {
-	boundary := fmt.Sprintf("secmgmt-boundary-%d", time.Now().UnixNano())
+func buildEmailMessage(fromAddress, fromName string, recipients []string, subject, textBody, htmlBody string, attachments []emailAttachment) []byte {
 	fromHeader := fromAddress
 	if strings.TrimSpace(fromName) != "" {
 		fromHeader = (&mail.Address{Name: fromName, Address: fromAddress}).String()
 	}
+	var message bytes.Buffer
 	headers := []string{
 		"From: " + fromHeader,
 		"To: " + strings.Join(recipients, ", "),
 		"Subject: " + mime.BEncoding.Encode("UTF-8", subject),
 		"MIME-Version: 1.0",
 		"Date: " + time.Now().Format(time.RFC1123Z),
-		"Content-Type: multipart/alternative; boundary=\"" + boundary + "\"",
-		"",
-		"--" + boundary,
+	}
+	if len(attachments) == 0 {
+		headers = append(headers, "Content-Type: multipart/alternative; boundary=\"secmgmt-alt\"")
+		headers = append(headers, "", "--secmgmt-alt", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "", textBody, "", "--secmgmt-alt", "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "", htmlBody, "", "--secmgmt-alt--", "")
+		return []byte(strings.Join(headers, "\r\n"))
+	}
+	message.WriteString(strings.Join(headers, "\r\n"))
+	message.WriteString("\r\n")
+
+	mixedWriter := multipart.NewWriter(&message)
+	_, _ = fmt.Fprintf(&message, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n", mixedWriter.Boundary())
+
+	altHeader := textproto.MIMEHeader{}
+	altHeader.Set("Content-Type", "multipart/alternative; boundary=\"secmgmt-alt\"")
+	altPart, _ := mixedWriter.CreatePart(altHeader)
+	_, _ = altPart.Write([]byte(strings.Join([]string{
+		"--secmgmt-alt",
 		"Content-Type: text/plain; charset=UTF-8",
 		"Content-Transfer-Encoding: 8bit",
 		"",
 		textBody,
 		"",
-		"--" + boundary,
+		"--secmgmt-alt",
 		"Content-Type: text/html; charset=UTF-8",
 		"Content-Transfer-Encoding: 8bit",
 		"",
 		htmlBody,
 		"",
-		"--" + boundary + "--",
+		"--secmgmt-alt--",
 		"",
+	}, "\r\n")))
+
+	for _, attachment := range attachments {
+		partHeader := textproto.MIMEHeader{}
+		partHeader.Set("Content-Type", attachment.ContentType)
+		partHeader.Set("Content-Transfer-Encoding", "base64")
+		partHeader.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", attachment.Filename))
+		part, err := mixedWriter.CreatePart(partHeader)
+		if err != nil {
+			continue
+		}
+		_, _ = part.Write([]byte(wrapBase64(base64.StdEncoding.EncodeToString(attachment.Content))))
 	}
-	return []byte(strings.Join(headers, "\r\n"))
+	_ = mixedWriter.Close()
+	return message.Bytes()
 }
 
 func sendSMTPMessage(host string, port int, username, password, from string, recipients []string, message []byte, timeout time.Duration) error {
@@ -881,4 +929,121 @@ func smtpTimeout(cfg *config.Config) time.Duration {
 		return 10 * time.Second
 	}
 	return time.Duration(cfg.PushHTTPTimeoutSeconds) * time.Second
+}
+
+func resolveAlarmEmailAttachments(cfg *config.Config, alarm entity.AlarmRecord) ([]emailAttachment, error) {
+	imageURL := strings.TrimSpace(alarm.ImageURL)
+	if imageURL == "" {
+		return nil, nil
+	}
+	attachment, err := resolveAlarmImageAttachment(cfg, imageURL, alarm.AlarmNo)
+	if err != nil {
+		return nil, err
+	}
+	if attachment == nil {
+		return nil, nil
+	}
+	return []emailAttachment{*attachment}, nil
+}
+
+func resolveAlarmImageAttachment(cfg *config.Config, imageURL, alarmNo string) (*emailAttachment, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("未加载系统配置，无法解析截图附件")
+	}
+	imagePath, err := resolveMediaFilePath(cfg, imageURL)
+	if err != nil {
+		return nil, err
+	}
+	content, err := os.ReadFile(imagePath)
+	if err != nil {
+		return nil, fmt.Errorf("读取告警截图失败: %w", err)
+	}
+	filename := buildAlarmImageAttachmentName(alarmNo, imagePath)
+	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(imagePath)))
+	if strings.TrimSpace(contentType) == "" {
+		contentType = http.DetectContentType(content)
+	}
+	if strings.TrimSpace(contentType) == "" {
+		contentType = "application/octet-stream"
+	}
+	return &emailAttachment{
+		Filename:    filename,
+		ContentType: contentType,
+		Content:     content,
+	}, nil
+}
+
+func resolveMediaFilePath(cfg *config.Config, imageURL string) (string, error) {
+	mediaRoot := strings.TrimSpace(cfg.MediaRootDir)
+	mediaMountPath := strings.TrimSpace(cfg.MediaMountPath)
+	if mediaRoot == "" || mediaMountPath == "" {
+		return "", fmt.Errorf("媒体目录配置不完整")
+	}
+	parsedURL, err := url.Parse(imageURL)
+	if err != nil {
+		return "", fmt.Errorf("截图地址无效: %w", err)
+	}
+	relativeURLPath := strings.TrimPrefix(parsedURL.Path, strings.TrimRight(mediaMountPath, "/")+"/")
+	if relativeURLPath == parsedURL.Path {
+		return "", fmt.Errorf("截图地址不在媒体目录下: %s", imageURL)
+	}
+	mediaRootAbs, err := filepath.Abs(mediaRoot)
+	if err != nil {
+		mediaRootAbs = mediaRoot
+	}
+	filePath := filepath.Join(mediaRootAbs, filepath.FromSlash(relativeURLPath))
+	filePathAbs, err := filepath.Abs(filePath)
+	if err != nil {
+		filePathAbs = filePath
+	}
+	relativePath, err := filepath.Rel(mediaRootAbs, filePathAbs)
+	if err != nil || strings.HasPrefix(relativePath, "..") {
+		return "", fmt.Errorf("截图路径越界: %s", imageURL)
+	}
+	return filePathAbs, nil
+}
+
+func buildAlarmImageAttachmentName(alarmNo, imagePath string) string {
+	ext := strings.ToLower(filepath.Ext(imagePath))
+	if ext == "" {
+		ext = ".jpg"
+	}
+	baseName := strings.TrimSpace(alarmNo)
+	if baseName == "" {
+		baseName = "alarm-snapshot"
+	}
+	baseName = strings.NewReplacer("\\", "-", "/", "-", ":", "-", "*", "-", "?", "-", "\"", "-", "<", "-", ">", "-", "|", "-").Replace(baseName)
+	return baseName + ext
+}
+
+func summarizeEmailAttachments(attachments []emailAttachment) []map[string]any {
+	if len(attachments) == 0 {
+		return []map[string]any{}
+	}
+	result := make([]map[string]any, 0, len(attachments))
+	for _, item := range attachments {
+		result = append(result, map[string]any{
+			"filename":    item.Filename,
+			"contentType": item.ContentType,
+			"size":        len(item.Content),
+		})
+	}
+	return result
+}
+
+func wrapBase64(value string) string {
+	if value == "" {
+		return ""
+	}
+	const lineLength = 76
+	var builder strings.Builder
+	for start := 0; start < len(value); start += lineLength {
+		end := start + lineLength
+		if end > len(value) {
+			end = len(value)
+		}
+		builder.WriteString(value[start:end])
+		builder.WriteString("\r\n")
+	}
+	return builder.String()
 }
