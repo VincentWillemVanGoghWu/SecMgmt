@@ -4,6 +4,25 @@ import { ElMessage } from "element-plus"
 const TOKEN_KEY = "steel-monitor-access-token"
 export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api"
 
+const errorMessageMap: Record<string, string> = {
+  "username or password is incorrect": "用户名或密码错误",
+  "invalid login payload": "登录请求参数不完整",
+  "missing authorization header": "缺少登录凭证，请重新登录",
+  "invalid authorization header": "登录凭证格式无效，请重新登录",
+  "invalid token": "登录状态已失效，请重新登录",
+}
+
+const normalizeResponseMessage = (message: unknown): string | undefined => {
+  if (typeof message !== "string") {
+    return undefined
+  }
+  const normalized = message.trim()
+  if (!normalized) {
+    return undefined
+  }
+  return errorMessageMap[normalized] ?? normalized
+}
+
 export const http = axios.create({
   baseURL: apiBaseUrl,
   timeout: 10000,
@@ -49,8 +68,8 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const responseMessage = error.response?.data?.message
-    if (typeof responseMessage === "string" && responseMessage) {
+    const responseMessage = normalizeResponseMessage(error.response?.data?.message)
+    if (responseMessage) {
       error.message = responseMessage
     }
     if (error.response?.status === 401) {

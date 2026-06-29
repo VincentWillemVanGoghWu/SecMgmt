@@ -191,6 +191,60 @@ func (h *PlatformHandler) UpdateRoleDataScope(c *gin.Context) {
 	response.OK(c, data)
 }
 
+func (h *PlatformHandler) ListRoleMenuTree(c *gin.Context) {
+	data, err := h.platformService.ListRoleMenuTree()
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) ListRolePermissionOptions(c *gin.Context) {
+	data, err := h.platformService.ListRolePermissionOptions()
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) UpdateRoleMenus(c *gin.Context) {
+	id, ok := pathUint(c, "id")
+	if !ok {
+		return
+	}
+	var payload service.RoleMenuPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := h.platformService.UpdateRoleMenus(id, payload)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) UpdateRolePermissions(c *gin.Context) {
+	id, ok := pathUint(c, "id")
+	if !ok {
+		return
+	}
+	var payload service.RolePermissionPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := h.platformService.UpdateRolePermissions(id, payload)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
 func (h *PlatformHandler) DeleteRole(c *gin.Context) {
 	id, ok := pathUint(c, "id")
 	if !ok {
@@ -518,7 +572,7 @@ func (h *PlatformHandler) GetCamera(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetCamera(id)
+	data, err := h.platformService.GetCamera(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -531,7 +585,7 @@ func (h *PlatformHandler) GetCameraBrowserLogin(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetCameraBrowserLogin(id)
+	data, err := h.platformService.GetCameraBrowserLogin(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -545,7 +599,7 @@ func (h *PlatformHandler) CreateCamera(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.CreateCamera(payload)
+	data, err := h.platformService.CreateCamera(payload, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -572,7 +626,7 @@ func (h *PlatformHandler) UpdateCamera(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.UpdateCamera(id, payload)
+	data, err := h.platformService.UpdateCamera(id, payload, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -592,7 +646,7 @@ func (h *PlatformHandler) UpdateCameraStatus(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.UpdateCameraStatus(id, payload.Status)
+	data, err := h.platformService.UpdateCameraStatus(id, payload.Status, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -605,7 +659,7 @@ func (h *PlatformHandler) DeleteCamera(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.platformService.DeleteCamera(id); err != nil {
+	if err := h.platformService.DeleteCamera(id, middleware.CurrentAccessScope(c)); err != nil {
 		handlePlatformError(c, err)
 		return
 	}
@@ -617,7 +671,7 @@ func (h *PlatformHandler) TestCameraConnection(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.TestCameraConnection(id)
+	data, err := h.platformService.TestCameraConnection(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -630,7 +684,7 @@ func (h *PlatformHandler) CheckCameraStatus(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.CheckCameraStatus(id)
+	data, err := h.platformService.CheckCameraStatus(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -643,7 +697,7 @@ func (h *PlatformHandler) GetCameraSDKConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetCameraSDKConfig(id)
+	data, err := h.platformService.GetCameraSDKConfig(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -680,7 +734,7 @@ func (h *PlatformHandler) SetCameraPTZPreset(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.GetCameraSDKConfig(id)
+	data, err := h.platformService.GetCameraSDKConfig(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -714,7 +768,7 @@ func (h *PlatformHandler) DeleteCameraPTZPreset(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetCameraSDKConfig(id)
+	data, err := h.platformService.GetCameraSDKConfig(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -755,7 +809,7 @@ func (h *PlatformHandler) ControlCameraPTZZoom(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "unsupported zoom action")
 		return
 	}
-	data, err := h.platformService.ControlCameraPTZZoom(id, action)
+	data, err := h.platformService.ControlCameraPTZZoom(id, action, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -773,7 +827,7 @@ func (h *PlatformHandler) UpsertCameraUser(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.GetCameraSDKConfig(id)
+	data, err := h.platformService.GetCameraSDKConfig(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -816,7 +870,7 @@ func (h *PlatformHandler) DeleteCameraUser(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetCameraSDKConfig(id)
+	data, err := h.platformService.GetCameraSDKConfig(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -839,7 +893,7 @@ func (h *PlatformHandler) GetRecorder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetRecorder(id)
+	data, err := h.platformService.GetRecorder(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -853,7 +907,7 @@ func (h *PlatformHandler) CreateRecorder(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.CreateRecorder(payload)
+	data, err := h.platformService.CreateRecorder(payload, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -871,7 +925,7 @@ func (h *PlatformHandler) UpdateRecorder(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.UpdateRecorder(id, payload)
+	data, err := h.platformService.UpdateRecorder(id, payload, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -884,7 +938,7 @@ func (h *PlatformHandler) DeleteRecorder(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.platformService.DeleteRecorder(id); err != nil {
+	if err := h.platformService.DeleteRecorder(id, middleware.CurrentAccessScope(c)); err != nil {
 		handlePlatformError(c, err)
 		return
 	}
@@ -896,7 +950,7 @@ func (h *PlatformHandler) TestRecorderConnection(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.TestRecorderConnection(id)
+	data, err := h.platformService.TestRecorderConnection(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -909,7 +963,7 @@ func (h *PlatformHandler) CheckRecorderStatus(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.CheckRecorderStatus(id)
+	data, err := h.platformService.CheckRecorderStatus(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -922,7 +976,7 @@ func (h *PlatformHandler) SyncRecorderChannels(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.SyncRecorderChannels(id)
+	data, err := h.platformService.SyncRecorderChannels(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -935,7 +989,7 @@ func (h *PlatformHandler) ListRecorderChannels(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.ListRecorderChannels(id)
+	data, err := h.platformService.ListRecorderChannels(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -953,7 +1007,7 @@ func (h *PlatformHandler) UpdateChannel(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.UpdateChannel(id, payload)
+	data, err := h.platformService.UpdateChannel(id, payload, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -974,7 +1028,7 @@ func (h *PlatformHandler) ListDeviceStatusLogs(c *gin.Context) {
 		Status:     strings.TrimSpace(c.Query("status")),
 		StartAt:    startAt,
 		EndAt:      endAt,
-	})
+	}, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -996,7 +1050,7 @@ func (h *PlatformHandler) GetAlarmDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetAlarmDetail(id)
+	data, err := h.platformService.GetAlarmDetail(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1016,7 +1070,7 @@ func (h *PlatformHandler) ProcessAlarm(c *gin.Context) {
 	}
 	operatorID := middleware.CurrentUserID(c)
 	operatorName := h.currentOperatorName(c, operatorID)
-	data, err := h.platformService.ProcessAlarm(id, payload, operatorName, operatorID)
+	data, err := h.platformService.ProcessAlarm(id, payload, operatorName, operatorID, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1035,7 +1089,7 @@ func (h *PlatformHandler) FalseAlarm(c *gin.Context) {
 	_ = c.ShouldBindJSON(&payload)
 	operatorID := middleware.CurrentUserID(c)
 	operatorName := h.currentOperatorName(c, operatorID)
-	data, err := h.platformService.FalseAlarm(id, payload.Remark, operatorName, operatorID)
+	data, err := h.platformService.FalseAlarm(id, payload.Remark, operatorName, operatorID, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1048,7 +1102,7 @@ func (h *PlatformHandler) RePushAlarm(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.RePushAlarm(id)
+	data, err := h.platformService.RePushAlarm(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1062,7 +1116,7 @@ func (h *PlatformHandler) DashboardAlarmTrend(c *gin.Context) {
 		response.Error(c, 400, err.Error())
 		return
 	}
-	response.OK(c, h.platformService.GetDashboardAlarmTrend(startAt, endAt))
+	response.OK(c, h.platformService.GetDashboardAlarmTrend(startAt, endAt, middleware.CurrentAccessScope(c)))
 }
 
 func (h *PlatformHandler) DashboardAlarmTypes(c *gin.Context) {
@@ -1071,15 +1125,15 @@ func (h *PlatformHandler) DashboardAlarmTypes(c *gin.Context) {
 		response.Error(c, 400, err.Error())
 		return
 	}
-	response.OK(c, h.platformService.GetDashboardAlarmTypes(startAt, endAt))
+	response.OK(c, h.platformService.GetDashboardAlarmTypes(startAt, endAt, middleware.CurrentAccessScope(c)))
 }
 
 func (h *PlatformHandler) DashboardZoneRanking(c *gin.Context) {
-	response.OK(c, h.platformService.GetDashboardZoneRanking())
+	response.OK(c, h.platformService.GetDashboardZoneRanking(middleware.CurrentAccessScope(c)))
 }
 
 func (h *PlatformHandler) DashboardDeviceStatus(c *gin.Context) {
-	response.OK(c, h.platformService.GetDashboardDeviceStatus())
+	response.OK(c, h.platformService.GetDashboardDeviceStatus(middleware.CurrentAccessScope(c)))
 }
 
 func (h *PlatformHandler) AlarmReport(c *gin.Context) {
@@ -1089,7 +1143,7 @@ func (h *PlatformHandler) AlarmReport(c *gin.Context) {
 		return
 	}
 	zonePage, zonePageSize := readNamedPageParams(c, "zone_page", "zone_page_size", 30)
-	data, err := h.platformService.GetAlarmReport(startAt, endAt, zonePage, zonePageSize)
+	data, err := h.platformService.GetAlarmReport(startAt, endAt, zonePage, zonePageSize, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1104,7 +1158,7 @@ func (h *PlatformHandler) DeviceReport(c *gin.Context) {
 		return
 	}
 	factoryPage, factoryPageSize := readNamedPageParams(c, "factory_page", "factory_page_size", 30)
-	response.OK(c, h.platformService.GetDeviceReport(startAt, endAt, factoryPage, factoryPageSize))
+	response.OK(c, h.platformService.GetDeviceReport(startAt, endAt, factoryPage, factoryPageSize, middleware.CurrentAccessScope(c)))
 }
 
 func (h *PlatformHandler) PushReport(c *gin.Context) {
@@ -1113,7 +1167,7 @@ func (h *PlatformHandler) PushReport(c *gin.Context) {
 		response.Error(c, 400, err.Error())
 		return
 	}
-	response.OK(c, h.platformService.GetPushReport(startAt, endAt))
+	response.OK(c, h.platformService.GetPushReport(startAt, endAt, middleware.CurrentAccessScope(c)))
 }
 
 func readNamedPageParams(c *gin.Context, pageKey, pageSizeKey string, defaultPageSize int) (int, int) {
@@ -1141,6 +1195,7 @@ func (h *PlatformHandler) ListPushConfigs(c *gin.Context) {
 		}
 		filter.Enabled = &enabled
 	}
+	filter.AccessScope = middleware.CurrentAccessScope(c)
 	data, err := h.platformService.ListPushConfigs(filter)
 	if err != nil {
 		handlePlatformError(c, err)
@@ -1155,7 +1210,7 @@ func (h *PlatformHandler) CreatePushConfig(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.CreatePushConfig(payload)
+	data, err := h.platformService.CreatePushConfig(payload, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1173,7 +1228,7 @@ func (h *PlatformHandler) UpdatePushConfig(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.UpdatePushConfig(id, payload)
+	data, err := h.platformService.UpdatePushConfig(id, payload, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1191,7 +1246,7 @@ func (h *PlatformHandler) UpdatePushConfigStatus(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.UpdatePushConfigStatus(id, payload.Enabled)
+	data, err := h.platformService.UpdatePushConfigStatus(id, payload.Enabled, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1204,7 +1259,7 @@ func (h *PlatformHandler) DeletePushConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.platformService.DeletePushConfig(id); err != nil {
+	if err := h.platformService.DeletePushConfig(id, middleware.CurrentAccessScope(c)); err != nil {
 		handlePlatformError(c, err)
 		return
 	}
@@ -1216,7 +1271,7 @@ func (h *PlatformHandler) TestPushConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.TestPushConfig(id)
+	data, err := h.platformService.TestPushConfig(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1232,11 +1287,12 @@ func (h *PlatformHandler) ListPushLogs(c *gin.Context) {
 		return
 	}
 	data, err := h.platformService.ListPushLogs(page, pageSize, service.PushLogListFilter{
-		Channel:   strings.TrimSpace(c.Query("channel")),
-		Status:    strings.TrimSpace(c.Query("status")),
-		AlarmType: strings.TrimSpace(c.Query("alarm_type")),
-		StartAt:   startAt,
-		EndAt:     endAt,
+		Channel:     strings.TrimSpace(c.Query("channel")),
+		Status:      strings.TrimSpace(c.Query("status")),
+		AlarmType:   strings.TrimSpace(c.Query("alarm_type")),
+		StartAt:     startAt,
+		EndAt:       endAt,
+		AccessScope: middleware.CurrentAccessScope(c),
 	})
 	if err != nil {
 		handlePlatformError(c, err)
@@ -1250,7 +1306,7 @@ func (h *PlatformHandler) RetryPushLog(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.RetryPushLog(id)
+	data, err := h.platformService.RetryPushLog(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1508,6 +1564,7 @@ func (h *PlatformHandler) ListSmartEvents(c *gin.Context) {
 		}
 		filter.RecentDays = recentDays
 	}
+	filter.AccessScope = middleware.CurrentAccessScope(c)
 	data, err := h.platformService.ListSmartEvents(page, pageSize, filter)
 	if err != nil {
 		handlePlatformError(c, err)
@@ -1521,7 +1578,7 @@ func (h *PlatformHandler) GetSmartEventDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetSmartEventDetail(id)
+	data, err := h.platformService.GetSmartEventDetail(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1539,7 +1596,7 @@ func (h *PlatformHandler) SubmitSmartAIReview(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.SubmitSmartAIReview(id, payload)
+	data, err := h.platformService.SubmitSmartAIReview(id, payload, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1548,7 +1605,7 @@ func (h *PlatformHandler) SubmitSmartAIReview(c *gin.Context) {
 }
 
 func (h *PlatformHandler) ListSmartAITasks(c *gin.Context) {
-	data, err := h.platformService.ListSmartAITasks()
+	data, err := h.platformService.ListSmartAITasks(middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1561,7 +1618,7 @@ func (h *PlatformHandler) GetSmartAITask(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetSmartAITask(id)
+	data, err := h.platformService.GetSmartAITask(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1574,7 +1631,7 @@ func (h *PlatformHandler) RetrySmartAITask(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.RetrySmartAITask(id)
+	data, err := h.platformService.RetrySmartAITask(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1601,7 +1658,7 @@ func (h *PlatformHandler) GetLiveVideo(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetLiveVideo("camera", id, c.Query("stream_type"), c.Query("stream_profile"))
+	data, err := h.platformService.GetLiveVideo("camera", id, c.Query("stream_type"), c.Query("stream_profile"), middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1614,7 +1671,7 @@ func (h *PlatformHandler) GetChannelLiveVideo(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetLiveVideo("channel", id, c.Query("stream_type"), c.Query("stream_profile"))
+	data, err := h.platformService.GetLiveVideo("channel", id, c.Query("stream_type"), c.Query("stream_profile"), middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1627,7 +1684,12 @@ func (h *PlatformHandler) StopLiveVideo(c *gin.Context) {
 	if !ok {
 		return
 	}
-	response.OK(c, h.platformService.StopLiveVideo("camera", id))
+	data, err := h.platformService.StopLiveVideo("camera", id, middleware.CurrentAccessScope(c))
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
 }
 
 func (h *PlatformHandler) StopChannelLiveVideo(c *gin.Context) {
@@ -1635,7 +1697,12 @@ func (h *PlatformHandler) StopChannelLiveVideo(c *gin.Context) {
 	if !ok {
 		return
 	}
-	response.OK(c, h.platformService.StopLiveVideo("channel", id))
+	data, err := h.platformService.StopLiveVideo("channel", id, middleware.CurrentAccessScope(c))
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
 }
 
 func (h *PlatformHandler) GetLiveWebControlConfig(c *gin.Context) {
@@ -1643,7 +1710,7 @@ func (h *PlatformHandler) GetLiveWebControlConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetLiveWebControlConfig("camera", id, c.Query("stream_profile"))
+	data, err := h.platformService.GetLiveWebControlConfig("camera", id, c.Query("stream_profile"), middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1656,7 +1723,7 @@ func (h *PlatformHandler) GetChannelLiveWebControlConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetLiveWebControlConfig("channel", id, c.Query("stream_profile"))
+	data, err := h.platformService.GetLiveWebControlConfig("channel", id, c.Query("stream_profile"), middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1673,7 +1740,12 @@ func (h *PlatformHandler) CreateSnapshot(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	response.OK(c, h.platformService.CreateSnapshot(payload.CameraID, payload.ChannelID))
+	data, err := h.platformService.CreateSnapshot(payload.CameraID, payload.ChannelID, middleware.CurrentAccessScope(c))
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
 }
 
 func (h *PlatformHandler) SearchPlaybackSegments(c *gin.Context) {
@@ -1684,7 +1756,7 @@ func (h *PlatformHandler) SearchPlaybackSegments(c *gin.Context) {
 	}
 	startTime, startOK := firstTimeQuery(c, "start_time", "startTime")
 	endTime, endOK := firstTimeQuery(c, "end_time", "endTime")
-	data, err := h.platformService.SearchPlaybackSegments(channelID, optionalTime(startTime, startOK), optionalTime(endTime, endOK))
+	data, err := h.platformService.SearchPlaybackSegments(channelID, optionalTime(startTime, startOK), optionalTime(endTime, endOK), middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1698,7 +1770,12 @@ func (h *PlatformHandler) GetPlaybackURL(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "missing channel_id")
 		return
 	}
-	response.OK(c, h.platformService.GetPlaybackURL(channelID, c.Query("stream_type"), c.Query("stream_profile"), c.Query("playback_mode")))
+	data, err := h.platformService.GetPlaybackURL(channelID, c.Query("stream_type"), c.Query("stream_profile"), c.Query("playback_mode"), middleware.CurrentAccessScope(c))
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
 }
 
 func (h *PlatformHandler) SeekPlayback(c *gin.Context) {
@@ -1707,7 +1784,12 @@ func (h *PlatformHandler) SeekPlayback(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "missing channel_id")
 		return
 	}
-	response.OK(c, h.platformService.GetPlaybackURL(channelID, c.Query("stream_type"), c.Query("stream_profile"), c.Query("playback_mode")))
+	data, err := h.platformService.GetPlaybackURL(channelID, c.Query("stream_type"), c.Query("stream_profile"), c.Query("playback_mode"), middleware.CurrentAccessScope(c))
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
 }
 
 func (h *PlatformHandler) DownloadPlaybackFile(c *gin.Context) {
@@ -1731,6 +1813,7 @@ func (h *PlatformHandler) DownloadPlaybackFile(c *gin.Context) {
 		startTime,
 		endTime,
 		firstStringQuery(c, "alarm_no", "alarmNo"),
+		middleware.CurrentAccessScope(c),
 	)
 	if err != nil {
 		handlePlatformError(c, err)
@@ -1749,7 +1832,12 @@ func (h *PlatformHandler) StopPlayback(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "missing channel_id")
 		return
 	}
-	response.OK(c, h.platformService.StopPlayback(channelID))
+	data, err := h.platformService.StopPlayback(channelID, middleware.CurrentAccessScope(c))
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
 }
 
 func (h *PlatformHandler) ExportAlarms(c *gin.Context) {
@@ -1798,7 +1886,7 @@ func (h *PlatformHandler) AlarmSSE(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		case <-ticker.C:
-			page, err := h.queryService.ListRealtimeAlarms(1, 1, dto.AlarmListFilter{})
+			page, err := h.queryService.ListRealtimeAlarms(1, 1, dto.AlarmListFilter{}, nil)
 			if err == nil && len(page.Items) > 0 {
 				writeSSEEvent(c.Writer, "alarm", realtimeAlarmEvent(page.Items[0]))
 			} else {
@@ -1842,7 +1930,7 @@ func (h *PlatformHandler) CreateAIEventCallback(c *gin.Context) {
 }
 
 func (h *PlatformHandler) ListAIEvents(c *gin.Context) {
-	page, err := h.platformService.ListSmartEvents(1, 200, service.SmartEventListFilter{})
+	page, err := h.platformService.ListSmartEvents(1, 200, service.SmartEventListFilter{AccessScope: middleware.CurrentAccessScope(c)})
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1860,7 +1948,7 @@ func (h *PlatformHandler) GetAIEventDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	data, err := h.platformService.GetSmartEventDetail(id)
+	data, err := h.platformService.GetSmartEventDetail(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1878,7 +1966,7 @@ func (h *PlatformHandler) updateCameraSDKSection(c *gin.Context, sectionName str
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := h.platformService.GetCameraSDKConfig(id)
+	data, err := h.platformService.GetCameraSDKConfig(id, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1893,7 +1981,11 @@ func (h *PlatformHandler) updateCameraSDKSection(c *gin.Context, sectionName str
 }
 
 func (h *PlatformHandler) exportCSV(c *gin.Context, kind string) {
-	content, filename := h.platformService.ExportCSV(kind)
+	content, filename, err := h.platformService.ExportCSV(kind, middleware.CurrentAccessScope(c))
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
 	respondAttachment(c, content, filename, "text/csv; charset=utf-8")
 }
 
@@ -1918,6 +2010,8 @@ func handlePlatformError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		response.Error(c, http.StatusNotFound, "record not found")
+	case errors.Is(err, service.ErrAccessDenied):
+		response.Error(c, http.StatusForbidden, "当前数据范围不允许访问该资源")
 	case errors.Is(err, service.ErrDeviceDeleteForbidden):
 		response.Error(c, http.StatusBadRequest, "设备已有关联业务，禁止删除")
 	default:

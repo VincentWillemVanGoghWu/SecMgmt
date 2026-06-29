@@ -33,6 +33,14 @@ func (r *Repository) FindUserByUsername(username string) (*entity.User, error) {
 	return &user, nil
 }
 
+func (r *Repository) GetDeptByID(deptID uint) (*entity.SysDept, error) {
+	var item entity.SysDept
+	if err := r.db.First(&item, deptID).Error; err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 func (r *Repository) GetUserByID(userID uint) (*entity.User, error) {
 	var user entity.User
 	if err := r.db.Where("id = ?", userID).First(&user).Error; err != nil {
@@ -50,6 +58,18 @@ func (r *Repository) ListRolesByUserID(userID uint) ([]entity.Role, error) {
 		Order("r.id ASC").
 		Scan(&roles).Error
 	return roles, err
+}
+
+func (r *Repository) ListRoleCodesByUserID(userID uint) ([]string, error) {
+	var roleCodes []string
+	err := r.db.Table("sys_role AS r").
+		Select("r.role_code").
+		Joins("JOIN sys_user_role ur ON ur.role_id = r.id").
+		Where("ur.user_id = ?", userID).
+		Group("r.role_code").
+		Order("MIN(r.id) ASC").
+		Scan(&roleCodes).Error
+	return roleCodes, err
 }
 
 func (r *Repository) ListMenusByUserID(userID uint) ([]entity.Menu, error) {
@@ -75,6 +95,19 @@ func (r *Repository) ListPermissionsByUserID(userID uint) ([]entity.Permission, 
 		Order("p.id ASC").
 		Scan(&permissions).Error
 	return permissions, err
+}
+
+func (r *Repository) ListPermissionCodesByUserID(userID uint) ([]string, error) {
+	var permissionCodes []string
+	err := r.db.Table("sys_permission AS p").
+		Select("p.code").
+		Joins("JOIN sys_role_permission rp ON rp.permission_id = p.id").
+		Joins("JOIN sys_user_role ur ON ur.role_id = rp.role_id").
+		Where("ur.user_id = ? AND p.status = ?", userID, "enabled").
+		Group("p.code").
+		Order("MIN(p.id) ASC").
+		Scan(&permissionCodes).Error
+	return permissionCodes, err
 }
 
 func (r *Repository) ListFactories() ([]entity.FactoryArea, error) {
@@ -226,6 +259,9 @@ func (r *Repository) ListAlarms(page, pageSize int, filter dto.AlarmListFilter) 
 }
 
 func applyAlarmListFilter(db *gorm.DB, filter dto.AlarmListFilter) *gorm.DB {
+	if filter.DenyAll {
+		return db.Where("1 = 0")
+	}
 	db = applyTimeRange(db, "a.alarm_time", filter.StartAt, filter.EndAt)
 	keywordText := strings.TrimSpace(filter.Keyword)
 	if keywordText != "" {
@@ -254,6 +290,31 @@ func applyAlarmListFilter(db *gorm.DB, filter dto.AlarmListFilter) *gorm.DB {
 	if filter.AlarmType != "" {
 		db = db.Where("a.alarm_type = ?", filter.AlarmType)
 	}
+	scopeClauses := make([]string, 0, 5)
+	scopeArgs := make([]any, 0, 5)
+	if len(filter.FactoryIDs) > 0 {
+		scopeClauses = append(scopeClauses, "a.factory_id IN ?")
+		scopeArgs = append(scopeArgs, filter.FactoryIDs)
+	}
+	if len(filter.ZoneIDs) > 0 {
+		scopeClauses = append(scopeClauses, "a.zone_id IN ?")
+		scopeArgs = append(scopeArgs, filter.ZoneIDs)
+	}
+	if len(filter.CameraIDs) > 0 {
+		scopeClauses = append(scopeClauses, "a.camera_id IN ?")
+		scopeArgs = append(scopeArgs, filter.CameraIDs)
+	}
+	if len(filter.RecorderIDs) > 0 {
+		scopeClauses = append(scopeClauses, "a.recorder_id IN ?")
+		scopeArgs = append(scopeArgs, filter.RecorderIDs)
+	}
+	if len(filter.ChannelIDs) > 0 {
+		scopeClauses = append(scopeClauses, "a.channel_id IN ?")
+		scopeArgs = append(scopeArgs, filter.ChannelIDs)
+	}
+	if len(scopeClauses) > 0 {
+		db = db.Where("("+strings.Join(scopeClauses, " OR ")+")", scopeArgs...)
+	}
 	return db
 }
 
@@ -269,11 +330,12 @@ type DashboardSummaryRow struct {
 	RecorderTotalCount  int64
 }
 
-func (r *Repository) GetDashboardSummary(startAt, endAt *time.Time) (*DashboardSummaryRow, error) {
+func (r *Repository) GetDashboardSummary(startAt, endAt *time.Time, accessScope dto.AccessScopeFilter) (*DashboardSummaryRow, error) {
 	startOfDay := time.Now().Truncate(24 * time.Hour)
 	row := &DashboardSummaryRow{}
 
 	todayQuery := r.db.Table("alarm_record")
+	todayQuery = applyAlarmScopeToTable(todayQuery, "alarm_record", accessScope)
 	if startAt != nil || endAt != nil {
 		todayQuery = applyTimeRange(todayQuery, "alarm_time", startAt, endAt)
 	} else {
@@ -282,32 +344,160 @@ func (r *Repository) GetDashboardSummary(startAt, endAt *time.Time) (*DashboardS
 	if err := todayQuery.Count(&row.TodayAlarmCount).Error; err != nil {
 		return nil, fmt.Errorf("count today's alarms: %w", err)
 	}
-	if err := applyTimeRange(r.db.Table("alarm_record").Where("status = ?", "pending"), "alarm_time", startAt, endAt).Count(&row.PendingAlarmCount).Error; err != nil {
+	if err := applyTimeRange(applyAlarmScopeToTable(r.db.Table("alarm_record").Where("status = ?", "pending"), "alarm_record", accessScope), "alarm_time", startAt, endAt).Count(&row.PendingAlarmCount).Error; err != nil {
 		return nil, err
 	}
-	if err := applyTimeRange(r.db.Table("alarm_record").Where("alarm_level = ?", "critical"), "alarm_time", startAt, endAt).Count(&row.CriticalAlarmCount).Error; err != nil {
+	if err := applyTimeRange(applyAlarmScopeToTable(r.db.Table("alarm_record").Where("alarm_level = ?", "critical"), "alarm_record", accessScope), "alarm_time", startAt, endAt).Count(&row.CriticalAlarmCount).Error; err != nil {
 		return nil, err
 	}
-	if err := applyTimeRange(r.db.Table("alarm_push_log").Where("status = ?", "success"), "pushed_at", startAt, endAt).Count(&row.PushSuccessCount).Error; err != nil {
+	if err := applyTimeRange(applyPushScopeToTable(r.db.Table("alarm_push_log").Where("status = ?", "success"), "alarm_push_log", accessScope), "pushed_at", startAt, endAt).Count(&row.PushSuccessCount).Error; err != nil {
 		return nil, err
 	}
-	if err := applyTimeRange(r.db.Table("alarm_push_log").Where("status = ?", "failed"), "pushed_at", startAt, endAt).Count(&row.PushFailedCount).Error; err != nil {
+	if err := applyTimeRange(applyPushScopeToTable(r.db.Table("alarm_push_log").Where("status = ?", "failed"), "alarm_push_log", accessScope), "pushed_at", startAt, endAt).Count(&row.PushFailedCount).Error; err != nil {
 		return nil, err
 	}
-	if err := r.db.Table("camera_device").Where("status = ?", "online").Count(&row.CameraOnlineCount).Error; err != nil {
+	if err := applyCameraScopeToTable(r.db.Table("camera_device").Where("status = ?", "online"), "camera_device", accessScope).Count(&row.CameraOnlineCount).Error; err != nil {
 		return nil, err
 	}
-	if err := r.db.Table("camera_device").Count(&row.CameraTotalCount).Error; err != nil {
+	if err := applyCameraScopeToTable(r.db.Table("camera_device"), "camera_device", accessScope).Count(&row.CameraTotalCount).Error; err != nil {
 		return nil, err
 	}
-	if err := r.db.Table("recorder_device").Where("status = ?", "online").Count(&row.RecorderOnlineCount).Error; err != nil {
+	if err := applyRecorderScopeToTable(r.db.Table("recorder_device").Where("status = ?", "online"), "recorder_device", accessScope).Count(&row.RecorderOnlineCount).Error; err != nil {
 		return nil, err
 	}
-	if err := r.db.Table("recorder_device").Count(&row.RecorderTotalCount).Error; err != nil {
+	if err := applyRecorderScopeToTable(r.db.Table("recorder_device"), "recorder_device", accessScope).Count(&row.RecorderTotalCount).Error; err != nil {
 		return nil, err
 	}
 
 	return row, nil
+}
+
+func applyAlarmScopeToTable(db *gorm.DB, alias string, accessScope dto.AccessScopeFilter) *gorm.DB {
+	if accessScope.All {
+		return db
+	}
+	clauses := make([]string, 0, 5)
+	args := make([]any, 0, 5)
+	if len(accessScope.FactoryIDs) > 0 {
+		clauses = append(clauses, alias+".factory_id IN ?")
+		args = append(args, accessScope.FactoryIDs)
+	}
+	if len(accessScope.ZoneIDs) > 0 {
+		clauses = append(clauses, alias+".zone_id IN ?")
+		args = append(args, accessScope.ZoneIDs)
+	}
+	if len(accessScope.CameraIDs) > 0 {
+		clauses = append(clauses, alias+".camera_id IN ?")
+		args = append(args, accessScope.CameraIDs)
+	}
+	if len(accessScope.RecorderIDs) > 0 {
+		clauses = append(clauses, alias+".recorder_id IN ?")
+		args = append(args, accessScope.RecorderIDs)
+	}
+	if len(accessScope.ChannelIDs) > 0 {
+		clauses = append(clauses, alias+".channel_id IN ?")
+		args = append(args, accessScope.ChannelIDs)
+	}
+	if len(clauses) == 0 {
+		return db.Where("1 = 0")
+	}
+	return db.Where("("+strings.Join(clauses, " OR ")+")", args...)
+}
+
+func applyPushScopeToTable(db *gorm.DB, alias string, accessScope dto.AccessScopeFilter) *gorm.DB {
+	if accessScope.All {
+		return db
+	}
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if len(accessScope.FactoryIDs) > 0 {
+		clauses = append(clauses, alias+".factory_id IN ?")
+		args = append(args, accessScope.FactoryIDs)
+	}
+	if len(accessScope.ZoneIDs) > 0 {
+		clauses = append(clauses, alias+".zone_id IN ?")
+		args = append(args, accessScope.ZoneIDs)
+	}
+	if len(clauses) == 0 {
+		return db.Where("1 = 0")
+	}
+	return db.Where("("+strings.Join(clauses, " OR ")+")", args...)
+}
+
+func applyCameraScopeToTable(db *gorm.DB, alias string, accessScope dto.AccessScopeFilter) *gorm.DB {
+	if accessScope.All {
+		return db
+	}
+	clauses := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if len(accessScope.FactoryIDs) > 0 {
+		clauses = append(clauses, alias+".factory_id IN ?")
+		args = append(args, accessScope.FactoryIDs)
+	}
+	if len(accessScope.ZoneIDs) > 0 {
+		clauses = append(clauses, alias+".zone_id IN ?")
+		args = append(args, accessScope.ZoneIDs)
+	}
+	if len(accessScope.CameraIDs) > 0 {
+		clauses = append(clauses, alias+".id IN ?")
+		args = append(args, accessScope.CameraIDs)
+	}
+	if len(clauses) == 0 {
+		return db.Where("1 = 0")
+	}
+	return db.Where("("+strings.Join(clauses, " OR ")+")", args...)
+}
+
+func applyRecorderScopeToTable(db *gorm.DB, alias string, accessScope dto.AccessScopeFilter) *gorm.DB {
+	if accessScope.All {
+		return db
+	}
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if len(accessScope.FactoryIDs) > 0 {
+		clauses = append(clauses, alias+".factory_id IN ?")
+		args = append(args, accessScope.FactoryIDs)
+	}
+	if len(accessScope.RecorderIDs) > 0 {
+		clauses = append(clauses, alias+".id IN ?")
+		args = append(args, accessScope.RecorderIDs)
+	}
+	if len(clauses) == 0 {
+		return db.Where("1 = 0")
+	}
+	return db.Where("("+strings.Join(clauses, " OR ")+")", args...)
+}
+
+func applyChannelScopeToTable(db *gorm.DB, alias string, accessScope dto.AccessScopeFilter) *gorm.DB {
+	if accessScope.All {
+		return db
+	}
+	clauses := make([]string, 0, 5)
+	args := make([]any, 0, 5)
+	if len(accessScope.FactoryIDs) > 0 {
+		clauses = append(clauses, alias+".factory_id IN ?")
+		args = append(args, accessScope.FactoryIDs)
+	}
+	if len(accessScope.ZoneIDs) > 0 {
+		clauses = append(clauses, alias+".zone_id IN ?")
+		args = append(args, accessScope.ZoneIDs)
+	}
+	if len(accessScope.CameraIDs) > 0 {
+		clauses = append(clauses, alias+".camera_id IN ?")
+		args = append(args, accessScope.CameraIDs)
+	}
+	if len(accessScope.RecorderIDs) > 0 {
+		clauses = append(clauses, alias+".recorder_id IN ?")
+		args = append(args, accessScope.RecorderIDs)
+	}
+	if len(accessScope.ChannelIDs) > 0 {
+		clauses = append(clauses, alias+".id IN ?")
+		args = append(args, accessScope.ChannelIDs)
+	}
+	if len(clauses) == 0 {
+		return db.Where("1 = 0")
+	}
+	return db.Where("("+strings.Join(clauses, " OR ")+")", args...)
 }
 
 func applyTimeRange(db *gorm.DB, column string, startAt, endAt *time.Time) *gorm.DB {

@@ -22,7 +22,7 @@ func NewAuthHandler(authService *service.AuthService) *AuthHandler {
 func (h *AuthHandler) Login(c *gin.Context) {
 	var payload dto.LoginRequest
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		response.Error(c, 400, "invalid login payload")
+		response.Error(c, 400, "登录请求参数不完整")
 		return
 	}
 

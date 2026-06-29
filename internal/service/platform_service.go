@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -42,7 +43,12 @@ var hiddenMenuCodeSet = map[string]struct{}{
 	"monitor-config":    {},
 }
 
+var hiddenPermissionCodeSet = map[string]struct{}{
+	"ai:event:callback": {},
+}
+
 var ErrDeviceDeleteForbidden = errors.New("device delete forbidden")
+var ErrAccessDenied = errors.New("access denied")
 
 func NewPlatformService(cfg *config.Config, repo *repository.Repository, logger *zap.Logger) *PlatformService {
 	return &PlatformService{cfg: cfg, repo: repo, logger: logger}
@@ -123,6 +129,14 @@ type RoleDataScopePayload struct {
 	DataScopeValue any    `json:"dataScopeValue"`
 }
 
+type RoleMenuPayload struct {
+	MenuIDs []uint `json:"menuIds"`
+}
+
+type RolePermissionPayload struct {
+	PermissionIDs []uint `json:"permissionIds"`
+}
+
 type StatusPayload struct {
 	Status string `json:"status"`
 }
@@ -131,14 +145,16 @@ type PushConfigListFilter struct {
 	Keyword      string
 	ProviderType string
 	Enabled      *bool
+	AccessScope  *AccessScope
 }
 
 type PushLogListFilter struct {
-	Channel   string
-	Status    string
-	AlarmType string
-	StartAt   *time.Time
-	EndAt     *time.Time
+	Channel     string
+	Status      string
+	AlarmType   string
+	StartAt     *time.Time
+	EndAt       *time.Time
+	AccessScope *AccessScope
 }
 
 type DeviceStatusLogListFilter struct {
@@ -323,6 +339,7 @@ type SmartEventListFilter struct {
 	Status         string
 	SourceStage    string
 	RecentDays     int
+	AccessScope    *AccessScope
 }
 
 type SmartAIReviewPayload struct {
@@ -486,6 +503,7 @@ func (s *PlatformService) ListRoles(filter RoleListFilter) ([]map[string]any, er
 		_ = s.db().Table("sys_menu AS m").Select("m.code").Joins("JOIN sys_role_menu rm ON rm.menu_id = m.id").Where("rm.role_id = ?", role.ID).Order("m.id ASC").Scan(&menuCodes).Error
 		menuCodes = filterHiddenMenuCodes(menuCodes)
 		_ = s.db().Table("sys_permission AS p").Select("p.code").Joins("JOIN sys_role_permission rp ON rp.permission_id = p.id").Where("rp.role_id = ?", role.ID).Order("p.id ASC").Scan(&permissionCodes).Error
+		permissionCodes = filterHiddenPermissionCodes(permissionCodes)
 		result = append(result, map[string]any{
 			"id":              role.ID,
 			"roleCode":        role.RoleCode,
@@ -524,7 +542,7 @@ func (s *PlatformService) UpdateRole(roleID uint, payload RolePayload) (map[stri
 	item.RoleName = strings.TrimSpace(payload.RoleName)
 	item.Status = normalizedStatus(payload.Status, item.Status)
 	item.Remark = valueOrEmpty(payload.Remark)
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
 	return s.GetRoleRecord(roleID)
@@ -536,7 +554,7 @@ func (s *PlatformService) UpdateRoleStatus(roleID uint, payload RoleStatusPayloa
 		return nil, err
 	}
 	item.Status = normalizedStatus(payload.Status, item.Status)
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
 	return s.GetRoleRecord(roleID)
@@ -549,9 +567,127 @@ func (s *PlatformService) UpdateRoleDataScope(roleID uint, payload RoleDataScope
 	}
 	item.DataScopeType = strings.TrimSpace(payload.DataScopeType)
 	item.DataScopeValue = encodeJSON(payload.DataScopeValue)
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
+	return s.GetRoleRecord(roleID)
+}
+
+func (s *PlatformService) ListRoleMenuTree() ([]dto.MenuItem, error) {
+	var menus []entity.Menu
+	if err := s.db().
+		Where("status = ?", "enabled").
+		Where("code NOT IN ?", keysOfHiddenMenuCodeSet()).
+		Order("sort ASC, id ASC").
+		Find(&menus).Error; err != nil {
+		return nil, err
+	}
+	return buildMenuTreeFromEntities(menus), nil
+}
+
+func (s *PlatformService) UpdateRoleMenus(roleID uint, payload RoleMenuPayload) (map[string]any, error) {
+	var role entity.Role
+	if err := s.db().First(&role, roleID).Error; err != nil {
+		return nil, err
+	}
+
+	menuIDs := dedupeUintSlice(payload.MenuIDs)
+	if len(menuIDs) > 0 {
+		var count int64
+		if err := s.db().
+			Model(&entity.Menu{}).
+			Where("id IN ?", menuIDs).
+			Where("status = ?", "enabled").
+			Where("code NOT IN ?", keysOfHiddenMenuCodeSet()).
+			Count(&count).Error; err != nil {
+			return nil, err
+		}
+		if count != int64(len(menuIDs)) {
+			return nil, fmt.Errorf("menu ids contains invalid records")
+		}
+	}
+
+	if err := s.db().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Table("sys_role_menu").Where("role_id = ?", roleID).Delete(nil).Error; err != nil {
+			return err
+		}
+		for _, menuID := range menuIDs {
+			if err := tx.Table("sys_role_menu").Create(map[string]any{
+				"role_id": roleID,
+				"menu_id": menuID,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return s.GetRoleRecord(roleID)
+}
+
+func (s *PlatformService) ListRolePermissionOptions() ([]dto.PermissionOption, error) {
+	var permissions []entity.Permission
+	if err := s.db().
+		Where("status = ?", "enabled").
+		Where("code NOT IN ?", keysOfHiddenPermissionCodeSet()).
+		Order("id ASC").
+		Find(&permissions).Error; err != nil {
+		return nil, err
+	}
+	return buildPermissionOptions(permissions), nil
+}
+
+func (s *PlatformService) UpdateRolePermissions(roleID uint, payload RolePermissionPayload) (map[string]any, error) {
+	var role entity.Role
+	if err := s.db().First(&role, roleID).Error; err != nil {
+		return nil, err
+	}
+
+	permissionIDs := dedupeUintSlice(payload.PermissionIDs)
+	if len(permissionIDs) > 0 {
+		var count int64
+		if err := s.db().
+			Model(&entity.Permission{}).
+			Where("id IN ?", permissionIDs).
+			Where("status = ?", "enabled").
+			Where("code NOT IN ?", keysOfHiddenPermissionCodeSet()).
+			Count(&count).Error; err != nil {
+			return nil, err
+		}
+		if count != int64(len(permissionIDs)) {
+			return nil, fmt.Errorf("permission ids contains invalid records")
+		}
+	}
+
+	if err := s.db().Transaction(func(tx *gorm.DB) error {
+		hiddenPermissionIDs := make([]uint, 0)
+		if err := tx.Table("sys_permission AS p").
+			Select("p.id").
+			Joins("JOIN sys_role_permission rp ON rp.permission_id = p.id").
+			Where("rp.role_id = ?", roleID).
+			Where("p.code IN ?", keysOfHiddenPermissionCodeSet()).
+			Scan(&hiddenPermissionIDs).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Table("sys_role_permission").Where("role_id = ?", roleID).Delete(nil).Error; err != nil {
+			return err
+		}
+		for _, permissionID := range append(hiddenPermissionIDs, permissionIDs...) {
+			if err := tx.Table("sys_role_permission").Create(map[string]any{
+				"role_id":       roleID,
+				"permission_id": permissionID,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
 	return s.GetRoleRecord(roleID)
 }
 
@@ -600,7 +736,7 @@ func (s *PlatformService) UpdateFactory(factoryID uint, payload FactoryPayload) 
 	item.FactoryName = strings.TrimSpace(payload.FactoryName)
 	item.Status = normalizedStatus(payload.Status, item.Status)
 	item.Remark = valueOrEmpty(payload.Remark)
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
 	return map[string]any{"id": item.ID, "factoryCode": item.FactoryCode, "factoryName": item.FactoryName, "status": item.Status, "remark": nullableString(item.Remark)}, nil
@@ -825,8 +961,8 @@ func (s *PlatformService) DeleteDictItem(itemID uint) error {
 	return s.db().Delete(&entity.SysDictItem{}, itemID).Error
 }
 
-func (s *PlatformService) GetCamera(cameraID uint) (map[string]any, error) {
-	items, err := NewQueryService(s.repo).ListCameras(CameraListFilter{})
+func (s *PlatformService) GetCamera(cameraID uint, accessScope *AccessScope) (map[string]any, error) {
+	items, err := NewQueryService(s.repo).ListCameras(CameraListFilter{AccessScope: accessScope})
 	if err != nil {
 		return nil, err
 	}
@@ -838,7 +974,10 @@ func (s *PlatformService) GetCamera(cameraID uint) (map[string]any, error) {
 	return nil, gorm.ErrRecordNotFound
 }
 
-func (s *PlatformService) CreateCamera(payload CameraPayload) (map[string]any, error) {
+func (s *PlatformService) CreateCamera(payload CameraPayload, accessScope *AccessScope) (map[string]any, error) {
+	if err := validateCameraTargetAccess(accessScope, payload.FactoryID, payload.ZoneID); err != nil {
+		return nil, err
+	}
 	encryptedPassword, err := util.EncryptDeviceSecret(s.deviceSecretKey(), payload.Password)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt camera password: %w", err)
@@ -862,12 +1001,15 @@ func (s *PlatformService) CreateCamera(payload CameraPayload) (map[string]any, e
 	if err := s.db().Create(&item).Error; err != nil {
 		return nil, err
 	}
-	return s.GetCamera(item.ID)
+	return s.GetCamera(item.ID, accessScope)
 }
 
-func (s *PlatformService) UpdateCamera(cameraID uint, payload CameraPayload) (map[string]any, error) {
-	var item entity.CameraDevice
-	if err := s.db().First(&item, cameraID).Error; err != nil {
+func (s *PlatformService) UpdateCamera(cameraID uint, payload CameraPayload, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureCameraAccessible(accessScope, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateCameraTargetAccess(accessScope, payload.FactoryID, payload.ZoneID); err != nil {
 		return nil, err
 	}
 	item.DeviceCode = payload.DeviceCode
@@ -893,12 +1035,12 @@ func (s *PlatformService) UpdateCamera(cameraID uint, payload CameraPayload) (ma
 	if err := s.db().Save(&item).Error; err != nil {
 		return nil, err
 	}
-	return s.GetCamera(cameraID)
+	return s.GetCamera(cameraID, accessScope)
 }
 
-func (s *PlatformService) UpdateCameraStatus(cameraID uint, status string) (map[string]any, error) {
-	var item entity.CameraDevice
-	if err := s.db().First(&item, cameraID).Error; err != nil {
+func (s *PlatformService) UpdateCameraStatus(cameraID uint, status string, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureCameraAccessible(accessScope, cameraID)
+	if err != nil {
 		return nil, err
 	}
 	item.Status = normalizedStatus(status, item.Status)
@@ -907,18 +1049,21 @@ func (s *PlatformService) UpdateCameraStatus(cameraID uint, status string) (map[
 	if err := s.db().Save(&item).Error; err != nil {
 		return nil, err
 	}
-	return s.GetCamera(cameraID)
+	return s.GetCamera(cameraID, accessScope)
 }
 
-func (s *PlatformService) DeleteCamera(cameraID uint) error {
+func (s *PlatformService) DeleteCamera(cameraID uint, accessScope *AccessScope) error {
+	if _, err := s.ensureCameraAccessible(accessScope, cameraID); err != nil {
+		return err
+	}
 	if err := s.db().Delete(&entity.CameraDevice{}, cameraID).Error; err != nil {
 		return wrapDeviceDeleteError(err)
 	}
 	return nil
 }
 
-func (s *PlatformService) TestCameraConnection(cameraID uint) (map[string]any, error) {
-	record, err := s.GetCamera(cameraID)
+func (s *PlatformService) TestCameraConnection(cameraID uint, accessScope *AccessScope) (map[string]any, error) {
+	record, err := s.GetCamera(cameraID, accessScope)
 	if err != nil {
 		return nil, err
 	}
@@ -930,8 +1075,8 @@ func (s *PlatformService) TestCameraConnection(cameraID uint) (map[string]any, e
 	}, nil
 }
 
-func (s *PlatformService) CheckCameraStatus(cameraID uint) (map[string]any, error) {
-	_, err := s.UpdateCameraStatus(cameraID, "online")
+func (s *PlatformService) CheckCameraStatus(cameraID uint, accessScope *AccessScope) (map[string]any, error) {
+	_, err := s.UpdateCameraStatus(cameraID, "online", accessScope)
 	if err != nil {
 		return nil, err
 	}
@@ -943,9 +1088,9 @@ func (s *PlatformService) CheckCameraStatus(cameraID uint) (map[string]any, erro
 	}, nil
 }
 
-func (s *PlatformService) ControlCameraPTZZoom(cameraID uint, action string) (map[string]any, error) {
-	var item entity.CameraDevice
-	if err := s.db().First(&item, cameraID).Error; err != nil {
+func (s *PlatformService) ControlCameraPTZZoom(cameraID uint, action string, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureCameraAccessible(accessScope, cameraID)
+	if err != nil {
 		return nil, err
 	}
 	password, err := util.ResolveDeviceSecret(s.deviceSecretKey(), item.PasswordEncrypted)
@@ -986,9 +1131,9 @@ func (s *PlatformService) ControlCameraPTZZoom(cameraID uint, action string) (ma
 	}, nil
 }
 
-func (s *PlatformService) GetCameraBrowserLogin(cameraID uint) (map[string]any, error) {
-	var item entity.CameraDevice
-	if err := s.db().First(&item, cameraID).Error; err != nil {
+func (s *PlatformService) GetCameraBrowserLogin(cameraID uint, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureCameraAccessible(accessScope, cameraID)
+	if err != nil {
 		return nil, err
 	}
 	password, err := util.ResolveDeviceSecret(s.deviceSecretKey(), item.PasswordEncrypted)
@@ -1013,20 +1158,20 @@ func (s *PlatformService) FetchCameraDeviceIdentity(payload CameraPayload) map[s
 	}
 }
 
-func (s *PlatformService) GetCameraSDKConfig(cameraID uint) (map[string]any, error) {
-	var item entity.CameraDevice
-	if err := s.db().First(&item, cameraID).Error; err != nil {
+func (s *PlatformService) GetCameraSDKConfig(cameraID uint, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureCameraAccessible(accessScope, cameraID)
+	if err != nil {
 		return nil, err
 	}
-	return defaultCameraSDKConfig(item), nil
+	return defaultCameraSDKConfig(*item), nil
 }
 
-func (s *PlatformService) UpdateCameraSDKSubConfig(cameraID uint) (map[string]any, error) {
-	return s.GetCameraSDKConfig(cameraID)
+func (s *PlatformService) UpdateCameraSDKSubConfig(cameraID uint, accessScope *AccessScope) (map[string]any, error) {
+	return s.GetCameraSDKConfig(cameraID, accessScope)
 }
 
-func (s *PlatformService) GetRecorder(recorderID uint) (map[string]any, error) {
-	items, err := NewQueryService(s.repo).ListRecorders(RecorderListFilter{})
+func (s *PlatformService) GetRecorder(recorderID uint, accessScope *AccessScope) (map[string]any, error) {
+	items, err := NewQueryService(s.repo).ListRecorders(RecorderListFilter{AccessScope: accessScope})
 	if err != nil {
 		return nil, err
 	}
@@ -1038,7 +1183,10 @@ func (s *PlatformService) GetRecorder(recorderID uint) (map[string]any, error) {
 	return nil, gorm.ErrRecordNotFound
 }
 
-func (s *PlatformService) CreateRecorder(payload RecorderPayload) (map[string]any, error) {
+func (s *PlatformService) CreateRecorder(payload RecorderPayload, accessScope *AccessScope) (map[string]any, error) {
+	if err := validateRecorderTargetAccess(accessScope, payload.FactoryID); err != nil {
+		return nil, err
+	}
 	encryptedPassword, err := util.EncryptDeviceSecret(s.deviceSecretKey(), payload.Password)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt recorder password: %w", err)
@@ -1058,12 +1206,15 @@ func (s *PlatformService) CreateRecorder(payload RecorderPayload) (map[string]an
 	if err := s.db().Create(&item).Error; err != nil {
 		return nil, err
 	}
-	return s.GetRecorder(item.ID)
+	return s.GetRecorder(item.ID, accessScope)
 }
 
-func (s *PlatformService) UpdateRecorder(recorderID uint, payload RecorderPayload) (map[string]any, error) {
-	var item entity.RecorderDevice
-	if err := s.db().First(&item, recorderID).Error; err != nil {
+func (s *PlatformService) UpdateRecorder(recorderID uint, payload RecorderPayload, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureRecorderAccessible(accessScope, recorderID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRecorderTargetAccess(accessScope, payload.FactoryID); err != nil {
 		return nil, err
 	}
 	item.DeviceCode = payload.DeviceCode
@@ -1082,13 +1233,16 @@ func (s *PlatformService) UpdateRecorder(recorderID uint, payload RecorderPayloa
 	item.ChannelCount = payload.ChannelCount
 	item.FactoryID = payload.FactoryID
 	item.Status = normalizedStatus(payload.Status, item.Status)
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
-	return s.GetRecorder(recorderID)
+	return s.GetRecorder(recorderID, accessScope)
 }
 
-func (s *PlatformService) DeleteRecorder(recorderID uint) error {
+func (s *PlatformService) DeleteRecorder(recorderID uint, accessScope *AccessScope) error {
+	if _, err := s.ensureRecorderAccessible(accessScope, recorderID); err != nil {
+		return err
+	}
 	if err := s.db().Where("recorder_id = ?", recorderID).Delete(&entity.RecorderChannel{}).Error; err != nil {
 		return wrapDeviceDeleteError(err)
 	}
@@ -1098,30 +1252,33 @@ func (s *PlatformService) DeleteRecorder(recorderID uint) error {
 	return nil
 }
 
-func (s *PlatformService) TestRecorderConnection(recorderID uint) (map[string]any, error) {
+func (s *PlatformService) TestRecorderConnection(recorderID uint, accessScope *AccessScope) (map[string]any, error) {
+	if _, err := s.ensureRecorderAccessible(accessScope, recorderID); err != nil {
+		return nil, err
+	}
 	return map[string]any{"success": true, "status": "online", "message": "录像机连接测试成功"}, nil
 }
 
-func (s *PlatformService) CheckRecorderStatus(recorderID uint) (map[string]any, error) {
-	var item entity.RecorderDevice
-	if err := s.db().First(&item, recorderID).Error; err != nil {
+func (s *PlatformService) CheckRecorderStatus(recorderID uint, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureRecorderAccessible(accessScope, recorderID)
+	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
 	item.Status = "online"
 	item.LastOnlineAt = &now
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
 	return map[string]any{"status": "online", "lastOnlineAt": now.Format(time.RFC3339), "message": "状态检查完成"}, nil
 }
 
-func (s *PlatformService) SyncRecorderChannels(recorderID uint) (map[string]any, error) {
-	var recorder entity.RecorderDevice
-	if err := s.db().First(&recorder, recorderID).Error; err != nil {
+func (s *PlatformService) SyncRecorderChannels(recorderID uint, accessScope *AccessScope) (map[string]any, error) {
+	recorder, err := s.ensureRecorderAccessible(accessScope, recorderID)
+	if err != nil {
 		return nil, err
 	}
-	deviceChannels, err := s.fetchRecorderChannels(recorder)
+	deviceChannels, err := s.fetchRecorderChannels(*recorder)
 	if err != nil {
 		if recorder.ChannelCount <= 0 {
 			return nil, err
@@ -1183,11 +1340,11 @@ func (s *PlatformService) SyncRecorderChannels(recorderID uint) (map[string]any,
 		recorder.ChannelCount = len(deviceChannels)
 		recorder.Status = "online"
 		recorder.LastOnlineAt = &now
-		return tx.Save(&recorder).Error
+		return tx.Save(recorder).Error
 	}); err != nil {
 		return nil, err
 	}
-	channels, err := NewQueryService(s.repo).ListChannels(ChannelListFilter{})
+	channels, err := NewQueryService(s.repo).ListChannels(ChannelListFilter{AccessScope: accessScope})
 	if err != nil {
 		return nil, err
 	}
@@ -1690,8 +1847,11 @@ func digestQuote(value string) string {
 	return strings.ReplaceAll(value, `"`, `\"`)
 }
 
-func (s *PlatformService) ListRecorderChannels(recorderID uint) ([]map[string]any, error) {
-	channels, err := NewQueryService(s.repo).ListChannels(ChannelListFilter{})
+func (s *PlatformService) ListRecorderChannels(recorderID uint, accessScope *AccessScope) ([]map[string]any, error) {
+	if _, err := s.ensureRecorderAccessible(accessScope, recorderID); err != nil {
+		return nil, err
+	}
+	channels, err := NewQueryService(s.repo).ListChannels(ChannelListFilter{AccessScope: accessScope})
 	if err != nil {
 		return nil, err
 	}
@@ -1704,9 +1864,12 @@ func (s *PlatformService) ListRecorderChannels(recorderID uint) ([]map[string]an
 	return filtered, nil
 }
 
-func (s *PlatformService) UpdateChannel(channelID uint, payload ChannelPayload) (map[string]any, error) {
-	var item entity.RecorderChannel
-	if err := s.db().First(&item, channelID).Error; err != nil {
+func (s *PlatformService) UpdateChannel(channelID uint, payload ChannelPayload, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureChannelAccessible(accessScope, channelID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateChannelTargetAccess(accessScope, payload.FactoryID, payload.ZoneID, payload.CameraID, item.RecorderID, channelID); err != nil {
 		return nil, err
 	}
 	item.Name = payload.Name
@@ -1716,10 +1879,10 @@ func (s *PlatformService) UpdateChannel(channelID uint, payload ChannelPayload) 
 	item.Enabled = payload.Enabled
 	item.SupportPlayback = payload.SupportPlayback
 	item.Status = normalizedStatus(payload.Status, item.Status)
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
-	channels, err := NewQueryService(s.repo).ListChannels(ChannelListFilter{})
+	channels, err := NewQueryService(s.repo).ListChannels(ChannelListFilter{AccessScope: accessScope})
 	if err != nil {
 		return nil, err
 	}
@@ -1731,7 +1894,7 @@ func (s *PlatformService) UpdateChannel(channelID uint, payload ChannelPayload) 
 	return nil, gorm.ErrRecordNotFound
 }
 
-func (s *PlatformService) ListDeviceStatusLogs(page, pageSize int, filter DeviceStatusLogListFilter) (map[string]any, error) {
+func (s *PlatformService) ListDeviceStatusLogs(page, pageSize int, filter DeviceStatusLogListFilter, accessScope *AccessScope) (map[string]any, error) {
 	query := s.db().Model(&entity.DeviceStatusLog{})
 	if filter.DeviceType != "" {
 		query = query.Where("device_type = ?", filter.DeviceType)
@@ -1753,6 +1916,9 @@ func (s *PlatformService) ListDeviceStatusLogs(page, pageSize int, filter Device
 
 	filtered := make([]map[string]any, 0, len(items))
 	for _, item := range items {
+		if accessScope != nil && !s.canAccessStatusLog(item, accessScope) {
+			continue
+		}
 		deviceName := s.resolveDeviceName(item.DeviceType, item.DeviceID)
 		if keyword := strings.TrimSpace(filter.DeviceName); keyword != "" && !strings.Contains(strings.ToLower(deviceName), strings.ToLower(keyword)) {
 			continue
@@ -1814,12 +1980,12 @@ func (s *PlatformService) CheckAllDevicesStatus() (map[string]any, error) {
 	}, nil
 }
 
-func (s *PlatformService) GetAlarmDetail(alarmID uint) (map[string]any, error) {
-	var alarm entity.AlarmRecord
-	if err := s.db().First(&alarm, alarmID).Error; err != nil {
+func (s *PlatformService) GetAlarmDetail(alarmID uint, accessScope *AccessScope) (map[string]any, error) {
+	alarm, err := s.ensureAlarmAccessible(accessScope, alarmID)
+	if err != nil {
 		return nil, err
 	}
-	items, err := NewQueryService(s.repo).ListAlarms(1, 1000, dto.AlarmListFilter{})
+	items, err := NewQueryService(s.repo).ListAlarms(1, 1000, dto.AlarmListFilter{}, accessScope)
 	if err != nil {
 		return nil, err
 	}
@@ -1847,14 +2013,14 @@ func (s *PlatformService) GetAlarmDetail(alarmID uint) (map[string]any, error) {
 	return base, nil
 }
 
-func (s *PlatformService) ProcessAlarm(alarmID uint, payload AlarmProcessPayload, operatorName string, operatorID uint) (map[string]any, error) {
-	var alarm entity.AlarmRecord
-	if err := s.db().First(&alarm, alarmID).Error; err != nil {
+func (s *PlatformService) ProcessAlarm(alarmID uint, payload AlarmProcessPayload, operatorName string, operatorID uint, accessScope *AccessScope) (map[string]any, error) {
+	alarm, err := s.ensureAlarmAccessible(accessScope, alarmID)
+	if err != nil {
 		return nil, err
 	}
 	fromStatus := alarm.Status
 	alarm.Status = normalizedStatus(payload.Status, alarm.Status)
-	if err := s.db().Save(&alarm).Error; err != nil {
+	if err := s.db().Save(alarm).Error; err != nil {
 		return nil, err
 	}
 	remark := valueOrEmpty(payload.Remark)
@@ -1867,20 +2033,20 @@ func (s *PlatformService) ProcessAlarm(alarmID uint, payload AlarmProcessPayload
 		OperatorName: operatorName,
 		Remark:       remark,
 	}).Error
-	detail, err := s.GetAlarmDetail(alarmID)
+	detail, err := s.GetAlarmDetail(alarmID, accessScope)
 	if err != nil {
 		return nil, err
 	}
 	return detail, nil
 }
 
-func (s *PlatformService) FalseAlarm(alarmID uint, remark string, operatorName string, operatorID uint) (map[string]any, error) {
-	return s.ProcessAlarm(alarmID, AlarmProcessPayload{Status: "false_alarm", Remark: &remark}, operatorName, operatorID)
+func (s *PlatformService) FalseAlarm(alarmID uint, remark string, operatorName string, operatorID uint, accessScope *AccessScope) (map[string]any, error) {
+	return s.ProcessAlarm(alarmID, AlarmProcessPayload{Status: "false_alarm", Remark: &remark}, operatorName, operatorID, accessScope)
 }
 
-func (s *PlatformService) RePushAlarm(alarmID uint) (map[string]any, error) {
-	var alarm entity.AlarmRecord
-	if err := s.db().First(&alarm, alarmID).Error; err != nil {
+func (s *PlatformService) RePushAlarm(alarmID uint, accessScope *AccessScope) (map[string]any, error) {
+	alarm, err := s.ensureAlarmAccessible(accessScope, alarmID)
+	if err != nil {
 		return nil, err
 	}
 	logItem := entity.AlarmPushLog{
@@ -1900,14 +2066,14 @@ func (s *PlatformService) RePushAlarm(alarmID uint) (map[string]any, error) {
 		PushedAt:     time.Now(),
 	}
 	_ = s.db().Create(&logItem).Error
-	detail, err := s.GetAlarmDetail(alarmID)
+	detail, err := s.GetAlarmDetail(alarmID, accessScope)
 	if err != nil {
 		return nil, err
 	}
 	return detail, nil
 }
 
-func (s *PlatformService) GetDashboardAlarmTrend(startAt, endAt *time.Time) map[string]any {
+func (s *PlatformService) GetDashboardAlarmTrend(startAt, endAt *time.Time, accessScope *AccessScope) map[string]any {
 	rangeStart, rangeEnd := normalizeDashboardRange(startAt, endAt, 7)
 	categories := []string{}
 	seriesData := []int{}
@@ -1917,6 +2083,7 @@ func (s *PlatformService) GetDashboardAlarmTrend(startAt, endAt *time.Time) map[
 		start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
 		end := start.Add(24 * time.Hour)
 		query := s.db().Model(&entity.AlarmRecord{}).Where("alarm_time >= ? AND alarm_time < ?", start, end)
+		query = s.applyAlarmAccessScopeQuery(query, "alarm_record", accessScope)
 		query = applyOptionalTimeRange(query, "alarm_time", startAt, endAt)
 		_ = query.Count(&count).Error
 		seriesData = append(seriesData, int(count))
@@ -1927,13 +2094,14 @@ func (s *PlatformService) GetDashboardAlarmTrend(startAt, endAt *time.Time) map[
 	}
 }
 
-func (s *PlatformService) GetDashboardAlarmTypes(startAt, endAt *time.Time) map[string]any {
+func (s *PlatformService) GetDashboardAlarmTypes(startAt, endAt *time.Time, accessScope *AccessScope) map[string]any {
 	type row struct {
 		Name  string `gorm:"column:alarm_type"`
 		Value int64  `gorm:"column:value"`
 	}
 	var rows []row
 	query := s.db().Table("alarm_record").Select("alarm_type, count(*) AS value")
+	query = s.applyAlarmAccessScopeQuery(query, "alarm_record", accessScope)
 	query = applyOptionalTimeRange(query, "alarm_time", startAt, endAt)
 	_ = query.Group("alarm_type").Order("value DESC").Scan(&rows).Error
 	items := make([]map[string]any, 0, len(rows))
@@ -1943,11 +2111,11 @@ func (s *PlatformService) GetDashboardAlarmTypes(startAt, endAt *time.Time) map[
 	return map[string]any{"items": items}
 }
 
-func (s *PlatformService) GetDashboardZoneRanking() map[string]any {
-	return map[string]any{"items": s.GetDashboardZoneRankingPage(nil, nil, 1, 10)["items"]}
+func (s *PlatformService) GetDashboardZoneRanking(accessScope *AccessScope) map[string]any {
+	return map[string]any{"items": s.GetDashboardZoneRankingPage(nil, nil, 1, 10, accessScope)["items"]}
 }
 
-func (s *PlatformService) GetDashboardZoneRankingPage(startAt, endAt *time.Time, page, pageSize int) map[string]any {
+func (s *PlatformService) GetDashboardZoneRankingPage(startAt, endAt *time.Time, page, pageSize int, accessScope *AccessScope) map[string]any {
 	type row struct {
 		FactoryID     *uint   `gorm:"column:factory_id"`
 		FactoryName   *string `gorm:"column:factory_name"`
@@ -1963,6 +2131,7 @@ func (s *PlatformService) GetDashboardZoneRankingPage(startAt, endAt *time.Time,
 		query := s.db().Table("alarm_record AS a").
 			Joins("LEFT JOIN factory_area f ON f.id = a.factory_id").
 			Joins("LEFT JOIN factory_zone z ON z.id = a.zone_id")
+		query = s.applyAlarmAccessScopeQuery(query, "a", accessScope)
 		query = applyOptionalTimeRange(query, "a.alarm_time", startAt, endAt)
 		return query.Group("a.factory_id, f.factory_name, a.zone_id, z.zone_name")
 	}
@@ -1990,16 +2159,16 @@ func (s *PlatformService) GetDashboardZoneRankingPage(startAt, endAt *time.Time,
 	return map[string]any{"items": items, "total": total, "page": page, "pageSize": pageSize}
 }
 
-func (s *PlatformService) GetDashboardDeviceStatus() map[string]any {
+func (s *PlatformService) GetDashboardDeviceStatus(accessScope *AccessScope) map[string]any {
 	return map[string]any{
-		"camera":   s.deviceStatusBlock("camera_device", "camera"),
-		"recorder": s.deviceStatusBlock("recorder_device", "recorder"),
-		"channel":  s.deviceStatusBlock("recorder_channel", "channel"),
+		"camera":   s.deviceStatusBlock("camera_device", "camera", accessScope),
+		"recorder": s.deviceStatusBlock("recorder_device", "recorder", accessScope),
+		"channel":  s.deviceStatusBlock("recorder_channel", "channel", accessScope),
 	}
 }
 
-func (s *PlatformService) GetAlarmReport(startAt, endAt *time.Time, zonePage, zonePageSize int) (map[string]any, error) {
-	summary, err := NewQueryService(s.repo).GetDashboardSummary(startAt, endAt)
+func (s *PlatformService) GetAlarmReport(startAt, endAt *time.Time, zonePage, zonePageSize int, accessScope *AccessScope) (map[string]any, error) {
+	summary, err := NewQueryService(s.repo).GetDashboardSummary(startAt, endAt, accessScope)
 	if err != nil {
 		return nil, err
 	}
@@ -2008,26 +2177,26 @@ func (s *PlatformService) GetAlarmReport(startAt, endAt *time.Time, zonePage, zo
 		Value int64  `gorm:"column:value"`
 	}
 	var statusRows []statusRow
-	statusQuery := applyOptionalTimeRange(s.db().Table("alarm_record"), "alarm_time", startAt, endAt)
+	statusQuery := applyOptionalTimeRange(s.applyAlarmAccessScopeQuery(s.db().Table("alarm_record"), "alarm_record", accessScope), "alarm_time", startAt, endAt)
 	_ = statusQuery.Select("status, count(*) AS value").Group("status").Scan(&statusRows).Error
 	statusSummary := make([]map[string]any, 0, len(statusRows))
 	for _, row := range statusRows {
 		statusSummary = append(statusSummary, map[string]any{"name": row.Name, "value": row.Value})
 	}
-	zoneRanking := s.GetDashboardZoneRankingPage(startAt, endAt, zonePage, zonePageSize)
+	zoneRanking := s.GetDashboardZoneRankingPage(startAt, endAt, zonePage, zonePageSize, accessScope)
 	return map[string]any{
 		"summary":       summary,
-		"trend":         s.GetDashboardAlarmTrend(startAt, endAt),
-		"alarmTypes":    s.GetDashboardAlarmTypes(startAt, endAt),
+		"trend":         s.GetDashboardAlarmTrend(startAt, endAt, accessScope),
+		"alarmTypes":    s.GetDashboardAlarmTypes(startAt, endAt, accessScope),
 		"statusSummary": statusSummary,
 		"zoneRanking":   zoneRanking,
 	}, nil
 }
 
-func (s *PlatformService) GetDeviceReport(startAt, endAt *time.Time, factoryPage, factoryPageSize int) map[string]any {
-	camera := s.deviceStatusBlock("camera_device", "camera")
-	recorder := s.deviceStatusBlock("recorder_device", "recorder")
-	channel := s.deviceStatusBlock("recorder_channel", "channel")
+func (s *PlatformService) GetDeviceReport(startAt, endAt *time.Time, factoryPage, factoryPageSize int, accessScope *AccessScope) map[string]any {
+	camera := s.deviceStatusBlock("camera_device", "camera", accessScope)
+	recorder := s.deviceStatusBlock("recorder_device", "recorder", accessScope)
+	channel := s.deviceStatusBlock("recorder_channel", "channel", accessScope)
 	type factoryRow struct {
 		FactoryID      uint   `gorm:"column:factory_id"`
 		FactoryName    string `gorm:"column:factory_name"`
@@ -2036,13 +2205,38 @@ func (s *PlatformService) GetDeviceReport(startAt, endAt *time.Time, factoryPage
 		RecorderTotal  int64  `gorm:"column:recorder_total"`
 		RecorderOnline int64  `gorm:"column:recorder_online"`
 	}
-	var rows []factoryRow
-	_ = s.db().Table("factory_area AS f").
-		Select("f.id AS factory_id, f.factory_name, count(distinct c.id) AS camera_total, sum(case when c.status = 'online' then 1 else 0 end) AS camera_online, count(distinct r.id) AS recorder_total, sum(case when r.status = 'online' then 1 else 0 end) AS recorder_online").
-		Joins("LEFT JOIN camera_device c ON c.factory_id = f.id").
-		Joins("LEFT JOIN recorder_device r ON r.factory_id = f.id").
-		Group("f.id, f.factory_name").
-		Scan(&rows).Error
+	cameras, _ := NewQueryService(s.repo).ListCameras(CameraListFilter{AccessScope: accessScope})
+	recorders, _ := NewQueryService(s.repo).ListRecorders(RecorderListFilter{AccessScope: accessScope})
+	factoryMap := make(map[uint]*factoryRow)
+	for _, item := range cameras {
+		row := factoryMap[item.FactoryID]
+		if row == nil {
+			row = &factoryRow{FactoryID: item.FactoryID, FactoryName: item.FactoryName}
+			factoryMap[item.FactoryID] = row
+		}
+		row.CameraTotal++
+		if item.Status == "online" {
+			row.CameraOnline++
+		}
+	}
+	for _, item := range recorders {
+		row := factoryMap[item.FactoryID]
+		if row == nil {
+			row = &factoryRow{FactoryID: item.FactoryID, FactoryName: item.FactoryName}
+			factoryMap[item.FactoryID] = row
+		}
+		row.RecorderTotal++
+		if item.Status == "online" {
+			row.RecorderOnline++
+		}
+	}
+	rows := make([]factoryRow, 0, len(factoryMap))
+	for _, row := range factoryMap {
+		rows = append(rows, *row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].FactoryID < rows[j].FactoryID
+	})
 	stats := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		stats = append(stats, map[string]any{
@@ -2069,20 +2263,20 @@ func (s *PlatformService) GetDeviceReport(startAt, endAt *time.Time, factoryPage
 		"cameraStatus":   camera,
 		"recorderStatus": recorder,
 		"channelStatus":  channel,
-		"statusTrend":    s.GetDashboardAlarmTrend(startAt, endAt),
+		"statusTrend":    s.GetDashboardAlarmTrend(startAt, endAt, accessScope),
 		"factoryStats":   map[string]any{"items": stats[startIndex:endIndex], "total": total, "page": factoryPage, "pageSize": factoryPageSize},
 	}
 }
 
-func (s *PlatformService) GetPushReport(startAt, endAt *time.Time) map[string]any {
+func (s *PlatformService) GetPushReport(startAt, endAt *time.Time, accessScope *AccessScope) map[string]any {
 	var statusRows []nameValueRow
 	var channelRows []nameValueRow
 	var total, success, failed, rateLimited int64
 	pushLogQuery := func() *gorm.DB {
-		return applyOptionalTimeRange(s.db().Model(&entity.AlarmPushLog{}), "pushed_at", startAt, endAt)
+		return applyOptionalTimeRange(s.applyPushLogAccessScopeQuery(s.db().Model(&entity.AlarmPushLog{}), "alarm_push_log", accessScope), "pushed_at", startAt, endAt)
 	}
 	pushLogTable := func() *gorm.DB {
-		return applyOptionalTimeRange(s.db().Table("alarm_push_log"), "pushed_at", startAt, endAt)
+		return applyOptionalTimeRange(s.applyPushLogAccessScopeQuery(s.db().Table("alarm_push_log"), "alarm_push_log", accessScope), "pushed_at", startAt, endAt)
 	}
 	_ = pushLogQuery().Count(&total).Error
 	_ = pushLogQuery().Where("status = ?", "success").Count(&success).Error
@@ -2097,7 +2291,7 @@ func (s *PlatformService) GetPushReport(startAt, endAt *time.Time) map[string]an
 		},
 		"channelDistribution": map[string]any{"items": rowsToItems(channelRows)},
 		"statusDistribution":  map[string]any{"items": rowsToItems(statusRows)},
-		"trend":               s.GetDashboardAlarmTrend(startAt, endAt),
+		"trend":               s.GetDashboardAlarmTrend(startAt, endAt, accessScope),
 	}
 }
 
@@ -2119,12 +2313,18 @@ func (s *PlatformService) ListPushConfigs(filter PushConfigListFilter) ([]map[st
 	}
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
+		if !s.canAccessPushConfig(item, filter.AccessScope) {
+			continue
+		}
 		result = append(result, pushConfigToMap(item))
 	}
 	return result, nil
 }
 
-func (s *PlatformService) CreatePushConfig(payload PushConfigPayload) (map[string]any, error) {
+func (s *PlatformService) CreatePushConfig(payload PushConfigPayload, accessScope *AccessScope) (map[string]any, error) {
+	if err := s.validatePushConfigScope(payload.FactoryIDs, payload.ZoneIDs, accessScope); err != nil {
+		return nil, err
+	}
 	item := entity.PushConfig{
 		ConfigName:             payload.ConfigName,
 		ProviderType:           payload.ProviderType,
@@ -2152,9 +2352,12 @@ func (s *PlatformService) CreatePushConfig(payload PushConfigPayload) (map[strin
 	return pushConfigToMap(item), nil
 }
 
-func (s *PlatformService) UpdatePushConfig(id uint, payload PushConfigPayload) (map[string]any, error) {
-	var item entity.PushConfig
-	if err := s.db().First(&item, id).Error; err != nil {
+func (s *PlatformService) UpdatePushConfig(id uint, payload PushConfigPayload, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensurePushConfigAccessible(id, accessScope)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validatePushConfigScope(payload.FactoryIDs, payload.ZoneIDs, accessScope); err != nil {
 		return nil, err
 	}
 	item.ConfigName = payload.ConfigName
@@ -2180,36 +2383,39 @@ func (s *PlatformService) UpdatePushConfig(id uint, payload PushConfigPayload) (
 	item.RetryMaxCount = payload.RetryMaxCount
 	item.RetryIntervalSeconds = payload.RetryIntervalSeconds
 	item.Remark = valueOrEmpty(payload.Remark)
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
-	return pushConfigToMap(item), nil
+	return pushConfigToMap(*item), nil
 }
 
-func (s *PlatformService) UpdatePushConfigStatus(id uint, enabled bool) (map[string]any, error) {
-	var item entity.PushConfig
-	if err := s.db().First(&item, id).Error; err != nil {
+func (s *PlatformService) UpdatePushConfigStatus(id uint, enabled bool, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensurePushConfigAccessible(id, accessScope)
+	if err != nil {
 		return nil, err
 	}
 	item.Enabled = enabled
-	if err := s.db().Save(&item).Error; err != nil {
+	if err := s.db().Save(item).Error; err != nil {
 		return nil, err
 	}
-	return pushConfigToMap(item), nil
+	return pushConfigToMap(*item), nil
 }
 
-func (s *PlatformService) DeletePushConfig(id uint) error {
+func (s *PlatformService) DeletePushConfig(id uint, accessScope *AccessScope) error {
+	if _, err := s.ensurePushConfigAccessible(id, accessScope); err != nil {
+		return err
+	}
 	return s.db().Delete(&entity.PushConfig{}, id).Error
 }
 
-func (s *PlatformService) TestPushConfig(id uint) (map[string]any, error) {
-	var item entity.PushConfig
-	if err := s.db().First(&item, id).Error; err != nil {
+func (s *PlatformService) TestPushConfig(id uint, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensurePushConfigAccessible(id, accessScope)
+	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
 	if item.ProviderType == "wechat" {
-		result := deliverTestWechatPush(item, now)
+		result := deliverTestWechatPush(*item, now)
 		logItem := entity.AlarmPushLog{
 			PushConfigID: &item.ID,
 			Channel:      "wechat",
@@ -2236,7 +2442,7 @@ func (s *PlatformService) TestPushConfig(id uint) (map[string]any, error) {
 }
 
 func (s *PlatformService) ListPushLogs(page, pageSize int, filter PushLogListFilter) (map[string]any, error) {
-	query := s.db().Model(&entity.AlarmPushLog{})
+	query := s.applyPushLogAccessScopeQuery(s.db().Model(&entity.AlarmPushLog{}), "alarm_push_log", filter.AccessScope)
 	if filter.Channel != "" {
 		query = query.Where("channel = ?", filter.Channel)
 	}
@@ -2267,10 +2473,13 @@ func (s *PlatformService) ListPushLogs(page, pageSize int, filter PushLogListFil
 	return map[string]any{"items": result, "total": total, "page": page, "pageSize": pageSize}, nil
 }
 
-func (s *PlatformService) RetryPushLog(id uint) (map[string]any, error) {
+func (s *PlatformService) RetryPushLog(id uint, accessScope *AccessScope) (map[string]any, error) {
 	var item entity.AlarmPushLog
 	if err := s.db().First(&item, id).Error; err != nil {
 		return nil, err
+	}
+	if accessScope != nil && !s.canAccessPushLog(item, accessScope) {
+		return nil, ErrAccessDenied
 	}
 	item.Status = "success"
 	item.RetryCount += 1
@@ -2533,7 +2742,7 @@ func (s *PlatformService) testSmartBindingDevice(binding entity.SmartDeviceBindi
 
 	switch binding.SourceType {
 	case "camera":
-		result, err := s.TestCameraConnection(binding.SourceID)
+		result, err := s.TestCameraConnection(binding.SourceID, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2547,7 +2756,7 @@ func (s *PlatformService) testSmartBindingDevice(binding entity.SmartDeviceBindi
 			"message":          result["message"],
 		}, nil
 	case "recorder":
-		result, err := s.TestRecorderConnection(binding.SourceID)
+		result, err := s.TestRecorderConnection(binding.SourceID, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2565,7 +2774,7 @@ func (s *PlatformService) testSmartBindingDevice(binding entity.SmartDeviceBindi
 		if err := s.db().First(&channel, binding.SourceID).Error; err != nil {
 			return nil, err
 		}
-		result, err := s.TestRecorderConnection(channel.RecorderID)
+		result, err := s.TestRecorderConnection(channel.RecorderID, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3049,6 +3258,7 @@ func (s *PlatformService) ListSmartEvents(page, pageSize int, filter SmartEventL
 	query := s.db().Table("smart_event AS e").
 		Joins("LEFT JOIN smart_interface_provider p ON p.id = e.provider_id").
 		Joins("LEFT JOIN smart_interface_capability c ON c.id = e.capability_id")
+	query = s.applySmartEventAccessScopeQuery(query, "e", filter.AccessScope)
 	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
 		likeKeyword := "%" + keyword + "%"
 		query = query.Where("(e.event_code LIKE ? OR e.event_type LIKE ? OR e.dedup_key LIKE ?)", likeKeyword, likeKeyword, likeKeyword)
@@ -3081,12 +3291,12 @@ func (s *PlatformService) ListSmartEvents(page, pageSize int, filter SmartEventL
 	return map[string]any{"items": eventItems, "total": total, "page": page, "pageSize": pageSize}, nil
 }
 
-func (s *PlatformService) GetSmartEventDetail(id uint) (map[string]any, error) {
-	var item entity.SmartEvent
-	if err := s.db().First(&item, id).Error; err != nil {
+func (s *PlatformService) GetSmartEventDetail(id uint, accessScope *AccessScope) (map[string]any, error) {
+	item, err := s.ensureSmartEventAccessible(id, accessScope)
+	if err != nil {
 		return nil, err
 	}
-	base := smartEventMap(item)
+	base := smartEventMap(*item)
 	if item.ProviderID != 0 {
 		var provider entity.SmartInterfaceProvider
 		if err := s.db().First(&provider, item.ProviderID).Error; err == nil {
@@ -3195,7 +3405,10 @@ func (s *PlatformService) GetSmartEventDetail(id uint) (map[string]any, error) {
 	return base, nil
 }
 
-func (s *PlatformService) SubmitSmartAIReview(eventID uint, payload SmartAIReviewPayload) (map[string]any, error) {
+func (s *PlatformService) SubmitSmartAIReview(eventID uint, payload SmartAIReviewPayload, accessScope *AccessScope) (map[string]any, error) {
+	if _, err := s.ensureSmartEventAccessible(eventID, accessScope); err != nil {
+		return nil, err
+	}
 	task := entity.AiReviewTask{
 		SmartEventID:       eventID,
 		TaskNo:             fmt.Sprintf("AIT-%s", strings.ToUpper(uuid.NewString())),
@@ -3213,10 +3426,12 @@ func (s *PlatformService) SubmitSmartAIReview(eventID uint, payload SmartAIRevie
 	return aiTaskMap(task, nil), nil
 }
 
-func (s *PlatformService) ListSmartAITasks() ([]map[string]any, error) {
+func (s *PlatformService) ListSmartAITasks(accessScope *AccessScope) ([]map[string]any, error) {
 	var tasks []entity.AiReviewTask
 	var results []entity.AiReviewResult
-	_ = s.db().Order("submitted_at DESC, id DESC").Find(&tasks).Error
+	query := s.db().Table("ai_review_task AS t").Joins("JOIN smart_event e ON e.id = t.smart_event_id")
+	query = s.applySmartEventAccessScopeQuery(query, "e", accessScope)
+	_ = query.Select("t.*").Order("t.submitted_at DESC, t.id DESC").Scan(&tasks).Error
 	taskIDs := make([]uint, 0, len(tasks))
 	for _, task := range tasks {
 		taskIDs = append(taskIDs, task.ID)
@@ -3227,9 +3442,12 @@ func (s *PlatformService) ListSmartAITasks() ([]map[string]any, error) {
 	return buildAITasks(tasks, results), nil
 }
 
-func (s *PlatformService) GetSmartAITask(taskID uint) (map[string]any, error) {
+func (s *PlatformService) GetSmartAITask(taskID uint, accessScope *AccessScope) (map[string]any, error) {
 	var task entity.AiReviewTask
 	if err := s.db().First(&task, taskID).Error; err != nil {
+		return nil, err
+	}
+	if _, err := s.ensureSmartEventAccessible(task.SmartEventID, accessScope); err != nil {
 		return nil, err
 	}
 	var result entity.AiReviewResult
@@ -3239,9 +3457,12 @@ func (s *PlatformService) GetSmartAITask(taskID uint) (map[string]any, error) {
 	return aiTaskMap(task, nil), nil
 }
 
-func (s *PlatformService) RetrySmartAITask(taskID uint) (map[string]any, error) {
+func (s *PlatformService) RetrySmartAITask(taskID uint, accessScope *AccessScope) (map[string]any, error) {
 	var task entity.AiReviewTask
 	if err := s.db().First(&task, taskID).Error; err != nil {
+		return nil, err
+	}
+	if _, err := s.ensureSmartEventAccessible(task.SmartEventID, accessScope); err != nil {
 		return nil, err
 	}
 	task.Status = "pending"
@@ -3281,7 +3502,17 @@ func (s *PlatformService) HandleSmartAICallback(payload SmartAICallbackPayload) 
 	return aiTaskMap(task, &result), nil
 }
 
-func (s *PlatformService) GetLiveVideo(sourceType string, id uint, streamType, streamProfile string) (map[string]any, error) {
+func (s *PlatformService) GetLiveVideo(sourceType string, id uint, streamType, streamProfile string, accessScope *AccessScope) (map[string]any, error) {
+	switch sourceType {
+	case "camera":
+		if _, err := s.ensureCameraAccessible(accessScope, id); err != nil {
+			return nil, err
+		}
+	case "channel":
+		if _, err := s.ensureChannelAccessible(accessScope, id); err != nil {
+			return nil, err
+		}
+	}
 	playURL := fmt.Sprintf("%s/mock/live/%s/%d.m3u8?profile=%s", strings.TrimRight(s.cfg.BackendPublicBaseURL, "/"), sourceType, id, streamProfile)
 	return map[string]any{
 		"cameraId":          chooseID(sourceType == "camera", id),
@@ -3297,19 +3528,29 @@ func (s *PlatformService) GetLiveVideo(sourceType string, id uint, streamType, s
 	}, nil
 }
 
-func (s *PlatformService) StopLiveVideo(sourceType string, id uint) map[string]any {
+func (s *PlatformService) StopLiveVideo(sourceType string, id uint, accessScope *AccessScope) (map[string]any, error) {
+	switch sourceType {
+	case "camera":
+		if _, err := s.ensureCameraAccessible(accessScope, id); err != nil {
+			return nil, err
+		}
+	case "channel":
+		if _, err := s.ensureChannelAccessible(accessScope, id); err != nil {
+			return nil, err
+		}
+	}
 	return map[string]any{
 		"cameraId":  chooseID(sourceType == "camera", id),
 		"channelId": chooseID(sourceType == "channel", id),
 		"stopped":   true,
 		"message":   "已停止实时预览",
-	}
+	}, nil
 }
 
-func (s *PlatformService) GetLiveWebControlConfig(sourceType string, id uint, streamProfile string) (map[string]any, error) {
+func (s *PlatformService) GetLiveWebControlConfig(sourceType string, id uint, streamProfile string, accessScope *AccessScope) (map[string]any, error) {
 	if sourceType == "camera" {
-		var camera entity.CameraDevice
-		if err := s.db().First(&camera, id).Error; err != nil {
+		camera, err := s.ensureCameraAccessible(accessScope, id)
+		if err != nil {
 			return nil, err
 		}
 		password, err := util.ResolveDeviceSecret(s.deviceSecretKey(), camera.PasswordEncrypted)
@@ -3336,11 +3577,11 @@ func (s *PlatformService) GetLiveWebControlConfig(sourceType string, id uint, st
 			"message":       "当前为海康客户端预览，默认通过前端同源代理转发，请确保已部署 WebSDK_noPlugin codebase 静态资源。",
 		}, nil
 	}
-	var channel entity.RecorderChannel
-	var recorder entity.RecorderDevice
-	if err := s.db().First(&channel, id).Error; err != nil {
+	channel, err := s.ensureChannelAccessible(accessScope, id)
+	if err != nil {
 		return nil, err
 	}
+	var recorder entity.RecorderDevice
 	if err := s.db().First(&recorder, channel.RecorderID).Error; err != nil {
 		return nil, err
 	}
@@ -3370,16 +3611,26 @@ func (s *PlatformService) GetLiveWebControlConfig(sourceType string, id uint, st
 	}, nil
 }
 
-func (s *PlatformService) CreateSnapshot(cameraID, channelID *uint) map[string]any {
+func (s *PlatformService) CreateSnapshot(cameraID, channelID *uint, accessScope *AccessScope) (map[string]any, error) {
+	if cameraID != nil {
+		if _, err := s.ensureCameraAccessible(accessScope, *cameraID); err != nil {
+			return nil, err
+		}
+	}
+	if channelID != nil {
+		if _, err := s.ensureChannelAccessible(accessScope, *channelID); err != nil {
+			return nil, err
+		}
+	}
 	snapshotURL := buildSnapshotDataURL(cameraID, channelID)
-	return map[string]any{"cameraId": cameraID, "channelId": channelID, "snapshotUrl": snapshotURL, "expiresIn": 300}
+	return map[string]any{"cameraId": cameraID, "channelId": channelID, "snapshotUrl": snapshotURL, "expiresIn": 300}, nil
 }
 
-func (s *PlatformService) SearchPlaybackSegments(channelID uint, startAt, endAt *time.Time) ([]map[string]any, error) {
-	var channel entity.RecorderChannel
+func (s *PlatformService) SearchPlaybackSegments(channelID uint, startAt, endAt *time.Time, accessScope *AccessScope) ([]map[string]any, error) {
+	channel, err := s.ensureChannelAccessible(accessScope, channelID)
 	var recorder entity.RecorderDevice
 	var camera entity.CameraDevice
-	if err := s.db().First(&channel, channelID).Error; err != nil {
+	if err != nil {
 		return nil, err
 	}
 	_ = s.db().First(&recorder, channel.RecorderID).Error
@@ -3411,7 +3662,10 @@ func (s *PlatformService) SearchPlaybackSegments(channelID uint, startAt, endAt 
 	}}, nil
 }
 
-func (s *PlatformService) GetPlaybackURL(channelID uint, streamType, streamProfile, playbackMode string) map[string]any {
+func (s *PlatformService) GetPlaybackURL(channelID uint, streamType, streamProfile, playbackMode string, accessScope *AccessScope) (map[string]any, error) {
+	if _, err := s.ensureChannelAccessible(accessScope, channelID); err != nil {
+		return nil, err
+	}
 	start := time.Now().Add(-30 * time.Minute)
 	end := time.Now()
 	return map[string]any{
@@ -3426,16 +3680,16 @@ func (s *PlatformService) GetPlaybackURL(channelID uint, streamType, streamProfi
 		"playableInBrowser": false,
 		"diagnosticMessage": "当前返回模拟回放地址",
 		"sourceRtsp":        fmt.Sprintf("rtsp://mock/playback/%d", channelID),
-	}
+	}, nil
 }
 
-func (s *PlatformService) DownloadPlaybackFile(channelID uint, startTime, endTime time.Time, alarmNo string) (string, string, error) {
+func (s *PlatformService) DownloadPlaybackFile(channelID uint, startTime, endTime time.Time, alarmNo string, accessScope *AccessScope) (string, string, error) {
 	if !endTime.After(startTime) {
 		return "", "", fmt.Errorf("invalid playback time range")
 	}
 
-	var channel entity.RecorderChannel
-	if err := s.db().First(&channel, channelID).Error; err != nil {
+	channel, err := s.ensureChannelAccessible(accessScope, channelID)
+	if err != nil {
 		return "", "", err
 	}
 
@@ -3477,8 +3731,76 @@ func (s *PlatformService) DownloadPlaybackFile(channelID uint, startTime, endTim
 	return outputPath, fileName, nil
 }
 
-func (s *PlatformService) StopPlayback(channelID uint) map[string]any {
-	return map[string]any{"channelId": channelID, "stopped": true, "message": "已停止回放"}
+func (s *PlatformService) StopPlayback(channelID uint, accessScope *AccessScope) (map[string]any, error) {
+	if _, err := s.ensureChannelAccessible(accessScope, channelID); err != nil {
+		return nil, err
+	}
+	return map[string]any{"channelId": channelID, "stopped": true, "message": "已停止回放"}, nil
+}
+
+func (s *PlatformService) ensureCameraAccessible(accessScope *AccessScope, cameraID uint) (*entity.CameraDevice, error) {
+	var item entity.CameraDevice
+	if err := s.db().First(&item, cameraID).Error; err != nil {
+		return nil, err
+	}
+	if accessScope != nil && !accessScope.AllowsCamera(item.FactoryID, item.ZoneID, item.ID) {
+		return nil, ErrAccessDenied
+	}
+	return &item, nil
+}
+
+func (s *PlatformService) ensureRecorderAccessible(accessScope *AccessScope, recorderID uint) (*entity.RecorderDevice, error) {
+	var item entity.RecorderDevice
+	if err := s.db().First(&item, recorderID).Error; err != nil {
+		return nil, err
+	}
+	if accessScope != nil && !accessScope.AllowsRecorder(item.FactoryID, item.ID) {
+		return nil, ErrAccessDenied
+	}
+	return &item, nil
+}
+
+func (s *PlatformService) ensureChannelAccessible(accessScope *AccessScope, channelID uint) (*entity.RecorderChannel, error) {
+	var item entity.RecorderChannel
+	if err := s.db().First(&item, channelID).Error; err != nil {
+		return nil, err
+	}
+	if accessScope != nil && !accessScope.AllowsChannel(item.FactoryID, item.ZoneID, item.CameraID, item.RecorderID, item.ID) {
+		return nil, ErrAccessDenied
+	}
+	return &item, nil
+}
+
+func (s *PlatformService) ensureAlarmAccessible(accessScope *AccessScope, alarmID uint) (*entity.AlarmRecord, error) {
+	var item entity.AlarmRecord
+	if err := s.db().First(&item, alarmID).Error; err != nil {
+		return nil, err
+	}
+	if accessScope != nil && !accessScope.AllowsAlarm(item.FactoryID, item.ZoneID, item.CameraID, item.RecorderID, item.ChannelID) {
+		return nil, ErrAccessDenied
+	}
+	return &item, nil
+}
+
+func validateCameraTargetAccess(accessScope *AccessScope, factoryID, zoneID uint) error {
+	if accessScope == nil || accessScope.AllowsCamera(factoryID, zoneID, 0) {
+		return nil
+	}
+	return ErrAccessDenied
+}
+
+func validateRecorderTargetAccess(accessScope *AccessScope, factoryID uint) error {
+	if accessScope == nil || accessScope.AllowsRecorder(factoryID, 0) {
+		return nil
+	}
+	return ErrAccessDenied
+}
+
+func validateChannelTargetAccess(accessScope *AccessScope, factoryID uint, zoneID, cameraID *uint, recorderID, channelID uint) error {
+	if accessScope == nil || accessScope.AllowsChannel(factoryID, zoneID, cameraID, recorderID, channelID) {
+		return nil
+	}
+	return ErrAccessDenied
 }
 
 func buildPlaybackDownloadFilename(alarmNo, recorderName, channelName string, startTime, endTime time.Time) string {
@@ -3532,10 +3854,68 @@ func sanitizePlaybackFilenamePart(value string) string {
 	return strings.Trim(builder.String(), "_")
 }
 
-func (s *PlatformService) ExportCSV(kind string) ([]byte, string) {
-	content := []byte("id,name,status\n1,example,ok\n")
-	filename := fmt.Sprintf("%s_%s.csv", kind, time.Now().Format("20060102150405"))
-	return content, filename
+func (s *PlatformService) ExportCSV(kind string, accessScope *AccessScope) ([]byte, string, error) {
+	var rows [][]string
+	switch kind {
+	case "alarms":
+		page, err := NewQueryService(s.repo).ListAlarms(1, 5000, dto.AlarmListFilter{}, accessScope)
+		if err != nil {
+			return nil, "", err
+		}
+		rows = append(rows, []string{"ID", "告警编号", "级别", "状态", "厂区", "区域", "时间"})
+		for _, item := range page.Items {
+			rows = append(rows, []string{
+				fmt.Sprintf("%d", item.ID),
+				item.AlarmNo,
+				item.AlarmLevel,
+				item.Status,
+				valueOrEmpty(item.FactoryName),
+				valueOrEmpty(item.ZoneName),
+				item.AlarmTime,
+			})
+		}
+	case "device-status":
+		data, err := s.ListDeviceStatusLogs(1, 5000, DeviceStatusLogListFilter{}, accessScope)
+		if err != nil {
+			return nil, "", err
+		}
+		rows = append(rows, []string{"ID", "设备类型", "设备ID", "设备名称", "原状态", "新状态", "检查时间"})
+		for _, raw := range data["items"].([]map[string]any) {
+			rows = append(rows, []string{
+				fmt.Sprint(raw["id"]),
+				fmt.Sprint(raw["deviceType"]),
+				fmt.Sprint(raw["deviceId"]),
+				fmt.Sprint(raw["deviceName"]),
+				fmt.Sprint(raw["oldStatus"]),
+				fmt.Sprint(raw["newStatus"]),
+				fmt.Sprint(raw["checkedAt"]),
+			})
+		}
+	case "push-logs":
+		data, err := s.ListPushLogs(1, 5000, PushLogListFilter{AccessScope: accessScope})
+		if err != nil {
+			return nil, "", err
+		}
+		rows = append(rows, []string{"ID", "告警编号", "渠道", "状态", "厂区ID", "区域ID", "推送时间"})
+		for _, raw := range data["items"].([]map[string]any) {
+			rows = append(rows, []string{
+				fmt.Sprint(raw["id"]),
+				fmt.Sprint(raw["alarmNo"]),
+				fmt.Sprint(raw["channel"]),
+				fmt.Sprint(raw["status"]),
+				fmt.Sprint(raw["factoryId"]),
+				fmt.Sprint(raw["zoneId"]),
+				fmt.Sprint(raw["pushedAt"]),
+			})
+		}
+	default:
+		rows = append(rows, []string{"message"}, []string{"unsupported export kind"})
+	}
+	var buffer bytes.Buffer
+	writer := csv.NewWriter(&buffer)
+	_ = writer.WriteAll(rows)
+	writer.Flush()
+	return buffer.Bytes(), fmt.Sprintf("%s_%s.csv", kind, time.Now().Format("20060102150405")), writer.Error()
 }
 
 func (s *PlatformService) replaceUserRoles(userID uint, roleIDs []uint) error {
@@ -3733,12 +4113,13 @@ func (s *PlatformService) resolveDeviceName(deviceType string, deviceID uint) st
 	return fmt.Sprintf("%s-%d", deviceType, deviceID)
 }
 
-func (s *PlatformService) deviceStatusBlock(tableName, deviceType string) map[string]any {
+func (s *PlatformService) deviceStatusBlock(tableName, deviceType string, accessScope *AccessScope) map[string]any {
 	var total, online, offline, disabled int64
-	_ = s.db().Table(tableName).Count(&total).Error
-	_ = s.db().Table(tableName).Where("status = ?", "online").Count(&online).Error
-	_ = s.db().Table(tableName).Where("status = ?", "offline").Count(&offline).Error
-	_ = s.db().Table(tableName).Where("status = ?", "disabled").Count(&disabled).Error
+	base := s.applyDeviceScopeQuery(s.db().Table(tableName), tableName, accessScope)
+	_ = base.Count(&total).Error
+	_ = s.applyDeviceScopeQuery(s.db().Table(tableName).Where("status = ?", "online"), tableName, accessScope).Count(&online).Error
+	_ = s.applyDeviceScopeQuery(s.db().Table(tableName).Where("status = ?", "offline"), tableName, accessScope).Count(&offline).Error
+	_ = s.applyDeviceScopeQuery(s.db().Table(tableName).Where("status = ?", "disabled"), tableName, accessScope).Count(&disabled).Error
 	exception := total - online - offline - disabled
 	if exception < 0 {
 		exception = 0
@@ -3752,6 +4133,198 @@ func (s *PlatformService) deviceStatusBlock(tableName, deviceType string) map[st
 		"disabled":   disabled,
 		"onlineRate": percent(online, total),
 	}
+}
+
+func (s *PlatformService) applyAlarmAccessScopeQuery(db *gorm.DB, alias string, accessScope *AccessScope) *gorm.DB {
+	return s.applyScopedResourceQuery(
+		db,
+		alias,
+		accessScope,
+		"factory_id",
+		"zone_id",
+		"camera_id",
+		"recorder_id",
+		"channel_id",
+	)
+}
+
+func (s *PlatformService) applyPushLogAccessScopeQuery(db *gorm.DB, alias string, accessScope *AccessScope) *gorm.DB {
+	return s.applyScopedResourceQuery(
+		db,
+		alias,
+		accessScope,
+		"factory_id",
+		"zone_id",
+		"",
+		"",
+		"",
+	)
+}
+
+func (s *PlatformService) applySmartEventAccessScopeQuery(db *gorm.DB, alias string, accessScope *AccessScope) *gorm.DB {
+	return s.applyScopedResourceQuery(
+		db,
+		alias,
+		accessScope,
+		"factory_id",
+		"zone_id",
+		"camera_id",
+		"recorder_id",
+		"channel_id",
+	)
+}
+
+func (s *PlatformService) applyDeviceScopeQuery(db *gorm.DB, tableName string, accessScope *AccessScope) *gorm.DB {
+	switch strings.ToLower(strings.TrimSpace(tableName)) {
+	case "camera_device":
+		return s.applyScopedResourceQuery(db, tableName, accessScope, "factory_id", "zone_id", "id", "", "")
+	case "recorder_device":
+		return s.applyScopedResourceQuery(db, tableName, accessScope, "factory_id", "", "", "id", "")
+	case "recorder_channel":
+		return s.applyScopedResourceQuery(db, tableName, accessScope, "factory_id", "zone_id", "camera_id", "recorder_id", "id")
+	default:
+		if accessScope == nil || accessScope.All {
+			return db
+		}
+		return db.Where("1 = 0")
+	}
+}
+
+func (s *PlatformService) applyScopedResourceQuery(db *gorm.DB, alias string, accessScope *AccessScope, factoryColumn, zoneColumn, cameraColumn, recorderColumn, channelColumn string) *gorm.DB {
+	if accessScope == nil || accessScope.All {
+		return db
+	}
+	clauses := make([]string, 0, 5)
+	args := make([]any, 0, 5)
+	appendClause := func(column string, ids []uint) {
+		if column == "" || len(ids) == 0 {
+			return
+		}
+		clauses = append(clauses, alias+"."+column+" IN ?")
+		args = append(args, ids)
+	}
+	appendClause(factoryColumn, accessScope.FactoryIDs)
+	appendClause(zoneColumn, accessScope.ZoneIDs)
+	appendClause(cameraColumn, accessScope.CameraIDs)
+	appendClause(recorderColumn, accessScope.RecorderIDs)
+	appendClause(channelColumn, accessScope.ChannelIDs)
+	if len(clauses) == 0 {
+		return db.Where("1 = 0")
+	}
+	return db.Where("("+strings.Join(clauses, " OR ")+")", args...)
+}
+
+func (s *PlatformService) canAccessPushConfig(item entity.PushConfig, accessScope *AccessScope) bool {
+	if accessScope == nil || accessScope.All {
+		return true
+	}
+	factoryIDs := decodeJSONUintSlice(item.FactoryIDsJSON)
+	for _, factoryID := range factoryIDs {
+		if accessScope.AllowsFactory(factoryID) {
+			return true
+		}
+	}
+	zoneIDs := decodeJSONUintSlice(item.ZoneIDsJSON)
+	zoneFactoryMap := s.loadZoneFactoryMap(zoneIDs)
+	for _, zoneID := range zoneIDs {
+		if accessScope.AllowsZone(zoneFactoryMap[zoneID], zoneID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *PlatformService) ensurePushConfigAccessible(id uint, accessScope *AccessScope) (*entity.PushConfig, error) {
+	var item entity.PushConfig
+	if err := s.db().First(&item, id).Error; err != nil {
+		return nil, err
+	}
+	if !s.canAccessPushConfig(item, accessScope) {
+		return nil, ErrAccessDenied
+	}
+	return &item, nil
+}
+
+func (s *PlatformService) validatePushConfigScope(factoryIDs, zoneIDs []uint, accessScope *AccessScope) error {
+	if accessScope == nil || accessScope.All {
+		return nil
+	}
+	if len(factoryIDs) == 0 && len(zoneIDs) == 0 {
+		return ErrAccessDenied
+	}
+	for _, factoryID := range factoryIDs {
+		if !accessScope.AllowsFactory(factoryID) {
+			return ErrAccessDenied
+		}
+	}
+	zoneFactoryMap := s.loadZoneFactoryMap(zoneIDs)
+	for _, zoneID := range zoneIDs {
+		if !accessScope.AllowsZone(zoneFactoryMap[zoneID], zoneID) {
+			return ErrAccessDenied
+		}
+	}
+	return nil
+}
+
+func (s *PlatformService) canAccessPushLog(item entity.AlarmPushLog, accessScope *AccessScope) bool {
+	if accessScope == nil || accessScope.All {
+		return true
+	}
+	return accessScope.AllowsAlarm(item.FactoryID, item.ZoneID, nil, nil, nil)
+}
+
+func (s *PlatformService) ensureSmartEventAccessible(id uint, accessScope *AccessScope) (*entity.SmartEvent, error) {
+	var item entity.SmartEvent
+	if err := s.db().First(&item, id).Error; err != nil {
+		return nil, err
+	}
+	if accessScope != nil && !accessScope.AllowsAlarm(item.FactoryID, item.ZoneID, item.CameraID, item.RecorderID, item.ChannelID) {
+		return nil, ErrAccessDenied
+	}
+	return &item, nil
+}
+
+func (s *PlatformService) canAccessStatusLog(item entity.DeviceStatusLog, accessScope *AccessScope) bool {
+	if accessScope == nil || accessScope.All {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(item.DeviceType)) {
+	case "camera":
+		var device entity.CameraDevice
+		if err := s.db().First(&device, item.DeviceID).Error; err != nil {
+			return false
+		}
+		return accessScope.AllowsCamera(device.FactoryID, device.ZoneID, device.ID)
+	case "recorder":
+		var device entity.RecorderDevice
+		if err := s.db().First(&device, item.DeviceID).Error; err != nil {
+			return false
+		}
+		return accessScope.AllowsRecorder(device.FactoryID, device.ID)
+	case "channel":
+		var device entity.RecorderChannel
+		if err := s.db().First(&device, item.DeviceID).Error; err != nil {
+			return false
+		}
+		return accessScope.AllowsChannel(device.FactoryID, device.ZoneID, device.CameraID, device.RecorderID, device.ID)
+	default:
+		return false
+	}
+}
+
+func (s *PlatformService) loadZoneFactoryMap(zoneIDs []uint) map[uint]uint {
+	result := make(map[uint]uint, len(zoneIDs))
+	if len(zoneIDs) == 0 {
+		return result
+	}
+	var zones []entity.FactoryZone
+	if err := s.db().Where("id IN ?", zoneIDs).Find(&zones).Error; err != nil {
+		return result
+	}
+	for _, zone := range zones {
+		result[zone.ID] = zone.FactoryID
+	}
+	return result
 }
 
 func defaultCameraSDKConfig(camera entity.CameraDevice) map[string]any {
@@ -3915,10 +4488,124 @@ func rowsToItems(rows []nameValueRow) []map[string]any {
 	return out
 }
 
+func buildMenuTreeFromEntities(menus []entity.Menu) []dto.MenuItem {
+	byParent := make(map[uint][]entity.Menu)
+	roots := make([]entity.Menu, 0)
+	for _, menu := range menus {
+		if menu.ParentID == nil {
+			roots = append(roots, menu)
+			continue
+		}
+		byParent[*menu.ParentID] = append(byParent[*menu.ParentID], menu)
+	}
+
+	var walk func(entity.Menu) dto.MenuItem
+	walk = func(menu entity.Menu) dto.MenuItem {
+		item := dto.MenuItem{
+			ID:        menu.ID,
+			Key:       menu.Code,
+			Label:     menu.Name,
+			Icon:      menu.Icon,
+			RouteName: menu.RouteName,
+			Path:      menu.RoutePath,
+		}
+		children := byParent[menu.ID]
+		if len(children) > 0 {
+			item.Children = make([]dto.MenuItem, 0, len(children))
+			for _, child := range children {
+				item.Children = append(item.Children, walk(child))
+			}
+		}
+		return item
+	}
+
+	tree := make([]dto.MenuItem, 0, len(roots))
+	for _, root := range roots {
+		tree = append(tree, walk(root))
+	}
+	return tree
+}
+
+func keysOfHiddenMenuCodeSet() []string {
+	keys := make([]string, 0, len(hiddenMenuCodeSet))
+	for code := range hiddenMenuCodeSet {
+		keys = append(keys, code)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func keysOfHiddenPermissionCodeSet() []string {
+	keys := make([]string, 0, len(hiddenPermissionCodeSet))
+	for code := range hiddenPermissionCodeSet {
+		keys = append(keys, code)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func dedupeUintSlice(values []uint) []uint {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]uint, 0, len(values))
+	for _, value := range values {
+		if value == 0 || containsScopeUint(result, value) {
+			continue
+		}
+		result = append(result, value)
+	}
+	sortUintAsc(result)
+	return result
+}
+
+func buildPermissionOptions(permissions []entity.Permission) []dto.PermissionOption {
+	options := make([]dto.PermissionOption, 0, len(permissions))
+	for _, permission := range permissions {
+		moduleKey, resourceKey := parsePermissionCode(permission.Code)
+		options = append(options, dto.PermissionOption{
+			ID:          permission.ID,
+			Name:        permission.Name,
+			Code:        permission.Code,
+			IsButton:    permission.IsButton,
+			ModuleKey:   moduleKey,
+			ResourceKey: resourceKey,
+		})
+	}
+	return options
+}
+
+func parsePermissionCode(code string) (string, string) {
+	parts := strings.Split(strings.TrimSpace(code), ":")
+	if len(parts) == 0 {
+		return "", ""
+	}
+	moduleKey := parts[0]
+	resourceKey := ""
+	if len(parts) > 1 {
+		resourceKey = strings.Join(parts[1:len(parts)-1], ":")
+		if resourceKey == "" {
+			resourceKey = parts[1]
+		}
+	}
+	return moduleKey, resourceKey
+}
+
 func filterHiddenMenuCodes(codes []string) []string {
 	out := make([]string, 0, len(codes))
 	for _, code := range codes {
 		if _, hidden := hiddenMenuCodeSet[code]; hidden {
+			continue
+		}
+		out = append(out, code)
+	}
+	return out
+}
+
+func filterHiddenPermissionCodes(codes []string) []string {
+	out := make([]string, 0, len(codes))
+	for _, code := range codes {
+		if _, hidden := hiddenPermissionCodeSet[code]; hidden {
 			continue
 		}
 		out = append(out, code)

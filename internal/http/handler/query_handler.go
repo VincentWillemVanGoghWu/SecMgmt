@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"secmgmt_go/internal/domain/dto"
+	"secmgmt_go/internal/http/middleware"
 	"secmgmt_go/internal/http/response"
 	"secmgmt_go/internal/service"
 
@@ -103,11 +104,12 @@ func (h *QueryHandler) ListCameras(c *gin.Context) {
 		return
 	}
 	data, err := h.queryService.ListCameras(service.CameraListFilter{
-		Keyword:   strings.TrimSpace(c.Query("keyword")),
-		FactoryID: factoryID,
-		ZoneID:    zoneID,
-		Status:    strings.TrimSpace(c.Query("status")),
-		SupportAI: supportAI,
+		Keyword:     strings.TrimSpace(c.Query("keyword")),
+		FactoryID:   factoryID,
+		ZoneID:      zoneID,
+		Status:      strings.TrimSpace(c.Query("status")),
+		SupportAI:   supportAI,
+		AccessScope: middleware.CurrentAccessScope(c),
 	})
 	if err != nil {
 		response.Error(c, 500, err.Error())
@@ -123,9 +125,10 @@ func (h *QueryHandler) ListRecorders(c *gin.Context) {
 		return
 	}
 	data, err := h.queryService.ListRecorders(service.RecorderListFilter{
-		Keyword:   strings.TrimSpace(c.Query("keyword")),
-		FactoryID: factoryID,
-		Status:    strings.TrimSpace(c.Query("status")),
+		Keyword:     strings.TrimSpace(c.Query("keyword")),
+		FactoryID:   factoryID,
+		Status:      strings.TrimSpace(c.Query("status")),
+		AccessScope: middleware.CurrentAccessScope(c),
 	})
 	if err != nil {
 		response.Error(c, 500, err.Error())
@@ -146,10 +149,11 @@ func (h *QueryHandler) ListChannels(c *gin.Context) {
 		return
 	}
 	data, err := h.queryService.ListChannels(service.ChannelListFilter{
-		Keyword:   strings.TrimSpace(c.Query("keyword")),
-		FactoryID: factoryID,
-		ZoneID:    zoneID,
-		Status:    strings.TrimSpace(c.Query("status")),
+		Keyword:     strings.TrimSpace(c.Query("keyword")),
+		FactoryID:   factoryID,
+		ZoneID:      zoneID,
+		Status:      strings.TrimSpace(c.Query("status")),
+		AccessScope: middleware.CurrentAccessScope(c),
 	})
 	if err != nil {
 		response.Error(c, 500, err.Error())
@@ -165,7 +169,7 @@ func (h *QueryHandler) ListRealtimeAlarms(c *gin.Context) {
 		response.Error(c, 400, err.Error())
 		return
 	}
-	data, err := h.queryService.ListRealtimeAlarms(page, pageSize, filter)
+	data, err := h.queryService.ListRealtimeAlarms(page, pageSize, filter, middleware.CurrentAccessScope(c))
 	if err != nil {
 		response.Error(c, 500, err.Error())
 		return
@@ -180,7 +184,7 @@ func (h *QueryHandler) ListAlarms(c *gin.Context) {
 		response.Error(c, 400, err.Error())
 		return
 	}
-	data, err := h.queryService.ListAlarms(page, pageSize, filter)
+	data, err := h.queryService.ListAlarms(page, pageSize, filter, middleware.CurrentAccessScope(c))
 	if err != nil {
 		response.Error(c, 500, err.Error())
 		return
@@ -194,7 +198,7 @@ func (h *QueryHandler) DashboardSummary(c *gin.Context) {
 		response.Error(c, 400, err.Error())
 		return
 	}
-	data, err := h.queryService.GetDashboardSummary(startAt, endAt)
+	data, err := h.queryService.GetDashboardSummary(startAt, endAt, middleware.CurrentAccessScope(c))
 	if err != nil {
 		response.Error(c, 500, err.Error())
 		return

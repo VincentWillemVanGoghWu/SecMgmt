@@ -38,6 +38,7 @@
 - [API 联调与调试指南](api-debugging.md)：curl、Apifox、Postman、SSE、文件下载和常见错误定位。
 - [OpenAPI 草案](openapi.yaml)：可导入 Apifox、Postman 或 Swagger UI 的接口描述文件。
 - [数据库设计](database.md)：表分组、核心关系、初始化数据、数据库变更规范。
+- [RBAC 权限设计方案](rbac-design.md)：角色、菜单、按钮、接口、数据范围的一体化权限设计与实施路径。
 - [配置项说明](configuration.md)：后端、前端、Docker Compose、SDK、媒体目录和生产配置检查。
 - [开发、部署与运维](development-deployment.md)：本地启动、构建、Docker Compose、Ubuntu 部署和运维要点。
 - [测试与验收文档](testing.md)：后端、前端、数据库、接口、设备、视频、告警、推送、AI 的验收清单。

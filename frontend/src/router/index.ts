@@ -21,7 +21,7 @@ router.beforeEach(async (to) => {
         return true
       }
     }
-    return { name: 'dashboard' }
+    return { name: permissionStore.defaultRouteName ?? 'dashboard' }
   }
 
   if (!to.meta.requiresAuth) {
@@ -45,6 +45,14 @@ router.beforeEach(async (to) => {
         query: { redirect: to.fullPath },
       }
     }
+  }
+
+  if (
+    to.name === 'dashboard' &&
+    permissionStore.defaultRouteName &&
+    permissionStore.defaultRouteName !== 'dashboard'
+  ) {
+    return { name: permissionStore.defaultRouteName }
   }
 
   return true

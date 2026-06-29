@@ -47,7 +47,7 @@ func Build(rootDir string) (*App, error) {
 		logger.Warn("start hikvision alarm bridge", zap.Error(err))
 	}
 
-	engine := router.New(cfg, router.Handlers{
+	engine := router.New(cfg, repo, router.Handlers{
 		Auth:     handler.NewAuthHandler(authService),
 		Query:    handler.NewQueryHandler(queryService),
 		Platform: handler.NewPlatformHandler(cfg, authService, queryService, platformService),

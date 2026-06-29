@@ -31,24 +31,27 @@ type DictTypeListFilter struct {
 }
 
 type CameraListFilter struct {
-	Keyword   string
-	FactoryID uint
-	ZoneID    uint
-	Status    string
-	SupportAI *bool
+	Keyword     string
+	FactoryID   uint
+	ZoneID      uint
+	Status      string
+	SupportAI   *bool
+	AccessScope *AccessScope
 }
 
 type RecorderListFilter struct {
-	Keyword   string
-	FactoryID uint
-	Status    string
+	Keyword     string
+	FactoryID   uint
+	Status      string
+	AccessScope *AccessScope
 }
 
 type ChannelListFilter struct {
-	Keyword   string
-	FactoryID uint
-	ZoneID    uint
-	Status    string
+	Keyword     string
+	FactoryID   uint
+	ZoneID      uint
+	Status      string
+	AccessScope *AccessScope
 }
 
 type QueryService struct {
@@ -231,6 +234,9 @@ func (s *QueryService) ListCameras(filter CameraListFilter) ([]dto.CameraRecord,
 		if filter.SupportAI != nil && item.SupportAI != *filter.SupportAI {
 			continue
 		}
+		if filter.AccessScope != nil && !filter.AccessScope.AllowsCamera(item.FactoryID, item.ZoneID, item.ID) {
+			continue
+		}
 		result = append(result, dto.CameraRecord{
 			ID:                 item.ID,
 			DeviceCode:         item.DeviceCode,
@@ -272,6 +278,9 @@ func (s *QueryService) ListRecorders(filter RecorderListFilter) ([]dto.RecorderR
 			}
 		}
 		if filter.Status != "" && item.Status != filter.Status {
+			continue
+		}
+		if filter.AccessScope != nil && !filter.AccessScope.AllowsRecorder(item.FactoryID, item.ID) {
 			continue
 		}
 		result = append(result, dto.RecorderRecord{
@@ -317,6 +326,9 @@ func (s *QueryService) ListChannels(filter ChannelListFilter) ([]dto.RecorderCha
 		if filter.Status != "" && item.Status != filter.Status {
 			continue
 		}
+		if filter.AccessScope != nil && !filter.AccessScope.AllowsChannel(item.FactoryID, item.ZoneID, item.CameraID, item.RecorderID, item.ID) {
+			continue
+		}
 		result = append(result, dto.RecorderChannelRecord{
 			ID:              item.ID,
 			RecorderID:      item.RecorderID,
@@ -337,8 +349,11 @@ func (s *QueryService) ListChannels(filter ChannelListFilter) ([]dto.RecorderCha
 	return result, nil
 }
 
-func (s *QueryService) ListRealtimeAlarms(page, pageSize int, filter dto.AlarmListFilter) (*dto.AlarmRealtimePageRecord, error) {
+func (s *QueryService) ListRealtimeAlarms(page, pageSize int, filter dto.AlarmListFilter, accessScope *AccessScope) (*dto.AlarmRealtimePageRecord, error) {
 	filter.ExcludeDone = true
+	if accessScope != nil {
+		accessScope.ApplyToAlarmFilter(&filter)
+	}
 	if filter.StartAt == nil {
 		now := time.Now()
 		startAt := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -2)
@@ -358,7 +373,10 @@ func (s *QueryService) ListRealtimeAlarms(page, pageSize int, filter dto.AlarmLi
 	return result, nil
 }
 
-func (s *QueryService) ListAlarms(page, pageSize int, filter dto.AlarmListFilter) (*dto.AlarmPageRecord, error) {
+func (s *QueryService) ListAlarms(page, pageSize int, filter dto.AlarmListFilter, accessScope *AccessScope) (*dto.AlarmPageRecord, error) {
+	if accessScope != nil {
+		accessScope.ApplyToAlarmFilter(&filter)
+	}
 	items, total, err := s.repo.ListAlarms(page, pageSize, filter)
 	if err != nil {
 		return nil, err
@@ -372,8 +390,12 @@ func (s *QueryService) ListAlarms(page, pageSize int, filter dto.AlarmListFilter
 	}, nil
 }
 
-func (s *QueryService) GetDashboardSummary(startAt, endAt *time.Time) (*dto.DashboardSummary, error) {
-	item, err := s.repo.GetDashboardSummary(startAt, endAt)
+func (s *QueryService) GetDashboardSummary(startAt, endAt *time.Time, accessScope *AccessScope) (*dto.DashboardSummary, error) {
+	scopeFilter := dto.AccessScopeFilter{All: true}
+	if accessScope != nil {
+		scopeFilter = accessScope.ToFilter()
+	}
+	item, err := s.repo.GetDashboardSummary(startAt, endAt, scopeFilter)
 	if err != nil {
 		return nil, err
 	}

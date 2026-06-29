@@ -166,7 +166,7 @@ onMounted(async () => {
     <section class="dashboard-hero">
       <div class="dashboard-hero__heading">
         <div>
-          <h1>固定污染源监测</h1>
+          <h1>固定污染源视频监控系统</h1>
         </div>
         <div class="dashboard-hero__actions">
           <el-date-picker

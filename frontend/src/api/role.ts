@@ -2,6 +2,10 @@ import type { ApiResponse } from "../types/auth"
 import type {
   RoleDataScopeRecord,
   RoleDataScopeUpdatePayload,
+  RoleMenuTreeItem,
+  RoleMenuUpdatePayload,
+  RolePermissionOption,
+  RolePermissionUpdatePayload,
   RoleStatusUpdatePayload,
   RoleSubmitPayload,
 } from "../types/role"
@@ -32,3 +36,21 @@ export const updateRoleDataScopeApi = async (
   payload: RoleDataScopeUpdatePayload,
 ): Promise<RoleDataScopeRecord> =>
   unwrap(await http.put<ApiResponse<RoleDataScopeRecord>>(`/roles/${id}/data-scope`, payload))
+
+export const listRoleMenuTreeApi = async (): Promise<RoleMenuTreeItem[]> =>
+  unwrap(await http.get<ApiResponse<RoleMenuTreeItem[]>>("/roles/menu-tree"))
+
+export const updateRoleMenusApi = async (
+  id: number,
+  payload: RoleMenuUpdatePayload,
+): Promise<RoleDataScopeRecord> =>
+  unwrap(await http.put<ApiResponse<RoleDataScopeRecord>>(`/roles/${id}/menus`, payload))
+
+export const listRolePermissionOptionsApi = async (): Promise<RolePermissionOption[]> =>
+  unwrap(await http.get<ApiResponse<RolePermissionOption[]>>("/roles/permission-options"))
+
+export const updateRolePermissionsApi = async (
+  id: number,
+  payload: RolePermissionUpdatePayload,
+): Promise<RoleDataScopeRecord> =>
+  unwrap(await http.put<ApiResponse<RoleDataScopeRecord>>(`/roles/${id}/permissions`, payload))

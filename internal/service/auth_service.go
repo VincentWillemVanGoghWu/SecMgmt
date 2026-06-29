@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
-var ErrInvalidCredentials = errors.New("username or password is incorrect")
+var ErrInvalidCredentials = errors.New("用户名或密码错误")
 
 type AuthService struct {
 	cfg  *config.Config
@@ -33,7 +33,8 @@ func (s *AuthService) Login(payload dto.LoginRequest) (*dto.LoginTokenData, erro
 		return nil, err
 	}
 
-	if user.Status != "enabled" || !util.CheckPassword(payload.Password, user.PasswordHash) {
+	passwordMatched := util.CheckPassword(payload.Password, user.PasswordHash)
+	if user.Status != "enabled" || !passwordMatched {
 		return nil, ErrInvalidCredentials
 	}
 

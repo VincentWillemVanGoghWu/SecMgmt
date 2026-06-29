@@ -43,6 +43,15 @@ type MenuItem struct {
 	Children  []MenuItem `json:"children,omitempty"`
 }
 
+type PermissionOption struct {
+	ID          uint   `json:"id"`
+	Name        string `json:"name"`
+	Code        string `json:"code"`
+	IsButton    bool   `json:"isButton"`
+	ModuleKey   string `json:"moduleKey"`
+	ResourceKey string `json:"resourceKey,omitempty"`
+}
+
 type MeData struct {
 	User              AuthUser        `json:"user"`
 	Roles             []RoleInfo      `json:"roles"`
@@ -203,6 +212,21 @@ type AlarmListFilter struct {
 	ExcludeDone bool
 	StartAt     *time.Time
 	EndAt       *time.Time
+	DenyAll     bool
+	FactoryIDs  []uint
+	ZoneIDs     []uint
+	CameraIDs   []uint
+	RecorderIDs []uint
+	ChannelIDs  []uint
+}
+
+type AccessScopeFilter struct {
+	All         bool
+	FactoryIDs  []uint
+	ZoneIDs     []uint
+	CameraIDs   []uint
+	RecorderIDs []uint
+	ChannelIDs  []uint
 }
 
 type AlarmPageRecord struct {

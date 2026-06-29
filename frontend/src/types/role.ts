@@ -1,3 +1,5 @@
+import type { MenuItem } from "./navigation"
+
 export type DataScopeType = "all" | "factory" | "zone" | "device" | "dept" | "self" | "custom"
 export type RoleStatus = "enabled" | "disabled"
 
@@ -36,6 +38,25 @@ export interface RoleSubmitPayload {
 export interface RoleDataScopeUpdatePayload {
   dataScopeType: DataScopeType
   dataScopeValue?: number[] | DeviceScopeValue | CustomScopeValue | null
+}
+
+export interface RoleMenuTreeItem extends MenuItem {}
+
+export interface RoleMenuUpdatePayload {
+  menuIds: number[]
+}
+
+export interface RolePermissionOption {
+  id: number
+  name: string
+  code: string
+  isButton: boolean
+  moduleKey: string
+  resourceKey?: string
+}
+
+export interface RolePermissionUpdatePayload {
+  permissionIds: number[]
 }
 
 export interface RoleStatusUpdatePayload {
