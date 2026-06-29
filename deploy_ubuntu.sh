@@ -16,6 +16,7 @@ MEDIA_DIR="${RUNTIME_DIR}/media"
 BACKEND_ENV_FILE="${GENERATED_DIR}/backend.env"
 COMPOSE_ENV_FILE="${GENERATED_DIR}/compose.env"
 NGINX_CONF_FILE="${GENERATED_DIR}/nginx.default.conf"
+PROJECT_ENV_FILE="${SCRIPT_DIR}/.env"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${FRONTEND_PORT:-80}"
 SERVER_NAME="${SERVER_NAME:-_}"
@@ -644,11 +645,23 @@ write_backend_env() {
   local jwt_secret
   local device_secret
   local ai_secret
+  local push_email_smtp_host
+  local push_email_smtp_port
+  local push_email_smtp_username
+  local push_email_smtp_password
+  local push_email_from
+  local push_email_from_name
 
   public_url="$(guess_public_base_url)"
   jwt_secret="$(ensure_env_secret_value "JWT_SECRET_KEY")"
   device_secret="$(ensure_env_secret_value "DEVICE_SECRET_KEY")"
   ai_secret="$(ensure_env_secret_value "AI_CALLBACK_SECRET")"
+  push_email_smtp_host="$(read_env_key "${PROJECT_ENV_FILE}" "PUSH_EMAIL_SMTP_HOST")"
+  push_email_smtp_port="$(read_env_key "${PROJECT_ENV_FILE}" "PUSH_EMAIL_SMTP_PORT")"
+  push_email_smtp_username="$(read_env_key "${PROJECT_ENV_FILE}" "PUSH_EMAIL_SMTP_USERNAME")"
+  push_email_smtp_password="$(read_env_key "${PROJECT_ENV_FILE}" "PUSH_EMAIL_SMTP_PASSWORD")"
+  push_email_from="$(read_env_key "${PROJECT_ENV_FILE}" "PUSH_EMAIL_FROM")"
+  push_email_from_name="$(read_env_key "${PROJECT_ENV_FILE}" "PUSH_EMAIL_FROM_NAME")"
 
   cat > "${BACKEND_ENV_FILE}" <<EOF
 APP_NAME=secmgmt-go
@@ -666,6 +679,12 @@ MEDIA_MOUNT_PATH=/media
 BACKEND_PUBLIC_BASE_URL=${public_url}
 AI_CALLBACK_SECRET=${ai_secret}
 PUSH_HTTP_TIMEOUT_SECONDS=10
+PUSH_EMAIL_SMTP_HOST=${push_email_smtp_host}
+PUSH_EMAIL_SMTP_PORT=${push_email_smtp_port}
+PUSH_EMAIL_SMTP_USERNAME=${push_email_smtp_username}
+PUSH_EMAIL_SMTP_PASSWORD=${push_email_smtp_password}
+PUSH_EMAIL_FROM=${push_email_from}
+PUSH_EMAIL_FROM_NAME=${push_email_from_name}
 EOF
 }
 
