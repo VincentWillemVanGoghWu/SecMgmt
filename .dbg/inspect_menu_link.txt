@@ -1,0 +1,2 @@
+menu: {ID:29 Code:safety-operation-logs Name:操作日志 ParentID:0x1e6c76286320 RouteName:0x1e6c7628a800 Sort:5 Status:enabled}
+admin_role_menu_link: 1

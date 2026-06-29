@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"secmgmt_go/internal/domain/entity"
+
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -38,4 +40,11 @@ func New(dsn string) (*gorm.DB, error) {
 	sqlDB.SetConnMaxLifetime(30 * time.Minute)
 
 	return db, nil
+}
+
+func Migrate(db *gorm.DB) error {
+	return db.AutoMigrate(
+		&entity.OperationLog{},
+		&entity.SystemSetting{},
+	)
 }

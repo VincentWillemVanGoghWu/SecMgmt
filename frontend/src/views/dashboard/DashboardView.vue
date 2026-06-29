@@ -3,18 +3,18 @@ import { computed, onMounted, reactive, ref } from "vue"
 import { useRouter } from "vue-router"
 import type { EChartsCoreOption } from "echarts/core"
 import { ElMessage } from "element-plus"
-import { DataAnalysis, RefreshRight, Warning } from "@element-plus/icons-vue"
+import { DataAnalysis, Histogram, RefreshRight } from "@element-plus/icons-vue"
 
 import AsyncEChart from "../../components/async/AsyncEChart.vue"
 import {
   getDashboardAlarmTrendApi,
-  getDashboardAlarmTypesApi,
+  getDashboardOperationStatsApi,
   getDashboardSummaryApi,
 } from "../../api/dashboard"
 import type {
   CategoryChart,
   DashboardSummary,
-  NameValueChart,
+  OperationDashboardStats,
 } from "../../types/dashboard"
 
 const router = useRouter()
@@ -22,7 +22,14 @@ const router = useRouter()
 const loading = ref(false)
 const summary = ref<DashboardSummary | null>(null)
 const alarmTrend = ref<CategoryChart>({ categories: [], series: [] })
-const alarmTypes = ref<NameValueChart>({ items: [] })
+const operationStats = ref<OperationDashboardStats>({
+  todayCount: 0,
+  successCount: 0,
+  failedCount: 0,
+  topUsers: [],
+  topDevices: [],
+  topActions: [],
+})
 
 const queryForm = reactive({
   range: [] as string[],
@@ -104,26 +111,6 @@ const trendOption = computed<EChartsCoreOption>(() => ({
   })),
 }))
 
-const alarmTypeOption = computed<EChartsCoreOption>(() => ({
-  backgroundColor: "transparent",
-  tooltip: { trigger: "item" },
-  legend: {
-    bottom: 0,
-    textStyle: { color: "#bfd0ea" },
-  },
-  series: [
-    {
-      name: "告警类型",
-      type: "pie",
-      radius: ["40%", "68%"],
-      center: ["50%", "44%"],
-      label: { color: "#d5e3f7" },
-      data: alarmTypes.value.items.map((item) => ({ name: item.name, value: item.value })),
-    },
-  ],
-}))
-
-
 const buildParams = () => {
   const [startAt, endAt] = queryForm.range ?? []
   return {
@@ -136,14 +123,14 @@ const loadDashboard = async () => {
   loading.value = true
   try {
     const params = buildParams()
-    const [summaryData, trendData, typeData] = await Promise.all([
+    const [summaryData, trendData, operationStatsData] = await Promise.all([
       getDashboardSummaryApi(params),
       getDashboardAlarmTrendApi(params),
-      getDashboardAlarmTypesApi(params),
+      getDashboardOperationStatsApi(params),
     ])
     summary.value = summaryData
     alarmTrend.value = trendData
-    alarmTypes.value = typeData
+    operationStats.value = operationStatsData
   } catch (error) {
     ElMessage.error(resolveErrorMessage(error, "加载驾驶舱数据失败"))
   } finally {
@@ -224,13 +211,61 @@ onMounted(async () => {
       <article class="dashboard-card">
         <header class="dashboard-card__header">
           <div>
-            <h3>告警类型分布</h3>
-            <p>按告警类型查看近期结构占比。</p>
+            <h3>操作统计</h3>
+            <p>展示今日 TOP 账号、TOP 设备与高频按钮操作。</p>
           </div>
-          <el-icon class="dashboard-card__icon"><Warning /></el-icon>
+          <el-icon class="dashboard-card__icon"><Histogram /></el-icon>
         </header>
-        <div class="dashboard-card__chart">
-          <AsyncEChart :option="alarmTypeOption" height="100%" />
+        <div class="dashboard-operation">
+          <section class="dashboard-operation__summary">
+            <article class="dashboard-operation__summary-card">
+              <span>今日操作量</span>
+              <strong>{{ operationStats.todayCount }}</strong>
+            </article>
+            <article class="dashboard-operation__summary-card dashboard-operation__summary-card--success">
+              <span>成功操作</span>
+              <strong>{{ operationStats.successCount }}</strong>
+            </article>
+            <article class="dashboard-operation__summary-card dashboard-operation__summary-card--danger">
+              <span>失败操作</span>
+              <strong>{{ operationStats.failedCount }}</strong>
+            </article>
+          </section>
+
+          <section class="dashboard-operation__rank">
+            <article class="dashboard-operation__block">
+              <h4>TOP 账号</h4>
+              <ol>
+                <li v-for="item in operationStats.topUsers" :key="`user-${item.name}`">
+                  <span>{{ item.name }}</span>
+                  <strong>{{ item.value }}</strong>
+                </li>
+                <li v-if="!operationStats.topUsers.length" class="dashboard-operation__empty">暂无数据</li>
+              </ol>
+            </article>
+
+            <article class="dashboard-operation__block">
+              <h4>TOP 设备</h4>
+              <ol>
+                <li v-for="item in operationStats.topDevices" :key="`device-${item.name}`">
+                  <span>{{ item.name }}</span>
+                  <strong>{{ item.value }}</strong>
+                </li>
+                <li v-if="!operationStats.topDevices.length" class="dashboard-operation__empty">暂无数据</li>
+              </ol>
+            </article>
+
+            <article class="dashboard-operation__block">
+              <h4>高频按钮</h4>
+              <ol>
+                <li v-for="item in operationStats.topActions" :key="`action-${item.name}`">
+                  <span>{{ item.name }}</span>
+                  <strong>{{ item.value }}</strong>
+                </li>
+                <li v-if="!operationStats.topActions.length" class="dashboard-operation__empty">暂无数据</li>
+              </ol>
+            </article>
+          </section>
         </div>
       </article>
     </section>
@@ -392,10 +427,117 @@ onMounted(async () => {
   min-height: 0;
 }
 
+.dashboard-operation {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.dashboard-operation__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.dashboard-operation__summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(14, 45, 81, 0.72);
+  border: 1px solid rgba(122, 165, 214, 0.18);
+}
+
+.dashboard-operation__summary-card span {
+  color: rgba(231, 240, 255, 0.68);
+  font-size: 12px;
+}
+
+.dashboard-operation__summary-card strong {
+  color: #f8fbff;
+  font-size: 24px;
+}
+
+.dashboard-operation__summary-card--success strong {
+  color: #54e2a0;
+}
+
+.dashboard-operation__summary-card--danger strong {
+  color: #ff8a98;
+}
+
+.dashboard-operation__rank {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.dashboard-operation__block {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(10, 34, 63, 0.76);
+  border: 1px solid rgba(122, 165, 214, 0.14);
+}
+
+.dashboard-operation__block h4 {
+  margin: 0 0 10px;
+  color: #f5f9ff;
+  font-size: 14px;
+}
+
+.dashboard-operation__block ol {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dashboard-operation__block li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d5e3f7;
+  font-size: 13px;
+}
+
+.dashboard-operation__block li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-operation__block li strong {
+  color: #63b4ff;
+  font-size: 15px;
+}
+
+.dashboard-operation__empty {
+  justify-content: center;
+  color: rgba(231, 240, 255, 0.5);
+}
+
 @media (max-width: 1280px) {
   .dashboard-metrics,
   .dashboard-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .dashboard-operation__rank {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -414,6 +556,10 @@ onMounted(async () => {
 
   .dashboard-metrics,
   .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-operation__summary {
     grid-template-columns: 1fr;
   }
 }

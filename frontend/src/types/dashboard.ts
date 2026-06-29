@@ -30,6 +30,20 @@ export interface NameValueChart {
   items: NameValueItem[]
 }
 
+export interface OperationDashboardItem {
+  name: string
+  value: number
+}
+
+export interface OperationDashboardStats {
+  todayCount: number
+  successCount: number
+  failedCount: number
+  topUsers: OperationDashboardItem[]
+  topDevices: OperationDashboardItem[]
+  topActions: OperationDashboardItem[]
+}
+
 export interface ZoneRankingItem {
   factoryId?: number | null
   factoryName?: string | null

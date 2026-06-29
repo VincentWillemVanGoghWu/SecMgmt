@@ -36,21 +36,30 @@ func Build(rootDir string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := database.Migrate(db); err != nil {
+		return nil, err
+	}
 
 	repo := repository.New(db)
 	authService := service.NewAuthService(cfg, repo)
 	queryService := service.NewQueryService(repo)
 	platformService := service.NewPlatformService(cfg, repo, logger)
+	operationLogService := service.NewOperationLogService(repo, logger)
+	if err := operationLogService.EnsureBootstrapData(); err != nil {
+		return nil, err
+	}
+	stopOperationLogCleanup := operationLogService.StartCleanupJob()
 	hikvisionBridgeService := service.NewHikvisionAlarmBridgeService(cfg, repo, logger)
 	platformService.SetHikvisionAlarmBridge(hikvisionBridgeService)
 	if err := hikvisionBridgeService.Start(); err != nil {
 		logger.Warn("start hikvision alarm bridge", zap.Error(err))
 	}
 
-	engine := router.New(cfg, repo, router.Handlers{
-		Auth:     handler.NewAuthHandler(authService),
-		Query:    handler.NewQueryHandler(queryService),
-		Platform: handler.NewPlatformHandler(cfg, authService, queryService, platformService),
+	engine := router.New(cfg, repo, operationLogService, router.Handlers{
+		Auth:      handler.NewAuthHandler(authService),
+		Query:     handler.NewQueryHandler(queryService),
+		Platform:  handler.NewPlatformHandler(cfg, authService, queryService, platformService),
+		Operation: handler.NewOperationLogHandler(operationLogService),
 	})
 
 	return &App{
@@ -58,6 +67,7 @@ func Build(rootDir string) (*App, error) {
 		Logger: logger,
 		Router: engine,
 		Close: func() {
+			stopOperationLogCleanup()
 			hikvisionBridgeService.Stop()
 		},
 	}, nil

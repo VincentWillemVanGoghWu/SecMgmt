@@ -36,6 +36,60 @@ CREATE INDEX ix_device_status_log_device_type ON device_status_log (device_type)
 CREATE INDEX ix_device_status_log_new_status ON device_status_log (new_status);
 
 
+CREATE TABLE operation_log (
+	id INTEGER NOT NULL AUTO_INCREMENT, 
+	trace_id VARCHAR(64), 
+	source VARCHAR(20) NOT NULL, 
+	operator_id INTEGER, 
+	operator_username VARCHAR(50), 
+	operator_real_name VARCHAR(50), 
+	role_codes VARCHAR(255), 
+	role_names VARCHAR(255), 
+	client_ip VARCHAR(64), 
+	ip_location VARCHAR(120), 
+	user_agent TEXT, 
+	os_name VARCHAR(50), 
+	menu_code VARCHAR(100), 
+	menu_name VARCHAR(150), 
+	route_path VARCHAR(255), 
+	page_title VARCHAR(150), 
+	page_component VARCHAR(100), 
+	action_code VARCHAR(150), 
+	action_name VARCHAR(150), 
+	operation_type VARCHAR(80), 
+	object_type VARCHAR(80), 
+	object_id VARCHAR(100), 
+	object_name VARCHAR(255), 
+	object_location VARCHAR(255), 
+	request_method VARCHAR(10), 
+	request_path VARCHAR(255), 
+	request_query TEXT, 
+	request_params LONGTEXT, 
+	device_point_info LONGTEXT, 
+	before_snapshot LONGTEXT, 
+	after_snapshot LONGTEXT, 
+	error_stack LONGTEXT, 
+	result_status VARCHAR(20), 
+	response_status INTEGER NOT NULL, 
+	duration_ms BIGINT NOT NULL, 
+	storage_partition VARCHAR(32) NOT NULL, 
+	retention_days INTEGER NOT NULL, 
+	extra_json LONGTEXT, 
+	operation_time DATETIME(3) NOT NULL, 
+	created_at DATETIME NOT NULL DEFAULT now(), 
+	PRIMARY KEY (id)
+);
+CREATE INDEX ix_operation_log_action_code ON operation_log (action_code);
+CREATE INDEX ix_operation_log_menu_code ON operation_log (menu_code);
+CREATE INDEX ix_operation_log_object_type ON operation_log (object_type);
+CREATE INDEX ix_operation_log_operation_time ON operation_log (operation_time);
+CREATE INDEX ix_operation_log_operation_type ON operation_log (operation_type);
+CREATE INDEX ix_operation_log_operator_username ON operation_log (operator_username);
+CREATE INDEX ix_operation_log_result_status ON operation_log (result_status);
+CREATE INDEX ix_operation_log_storage_partition ON operation_log (storage_partition);
+CREATE INDEX ix_operation_log_trace_id ON operation_log (trace_id);
+
+
 CREATE TABLE factory_area (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
 	factory_code VARCHAR(50) NOT NULL, 
@@ -77,6 +131,19 @@ CREATE TABLE push_config (
 CREATE UNIQUE INDEX ix_push_config_config_name ON push_config (config_name);
 CREATE INDEX ix_push_config_enabled ON push_config (enabled);
 CREATE INDEX ix_push_config_provider_type ON push_config (provider_type);
+
+
+CREATE TABLE system_setting (
+	id INTEGER NOT NULL AUTO_INCREMENT, 
+	setting_key VARCHAR(120) NOT NULL, 
+	setting_name VARCHAR(150) NOT NULL, 
+	setting_value VARCHAR(255) NOT NULL, 
+	remark VARCHAR(255), 
+	created_at DATETIME NOT NULL DEFAULT now(), 
+	updated_at DATETIME NOT NULL DEFAULT now(), 
+	PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX ix_system_setting_setting_key ON system_setting (setting_key);
 
 
 CREATE TABLE smart_interface_capability (
@@ -737,6 +804,7 @@ INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (26, '系统管理', 'system', NULL, NULL, NULL, 'Lock', 'catalog', 8, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (27, '用户管理', 'system-users', 26, 'system-users', '/system/users', 'User', 'menu', 1, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (28, '角色权限', 'system-roles', 26, 'system-roles', '/system/roles', 'CircleCheck', 'menu', 2, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
+INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (29, '操作日志', 'safety-operation-logs', 2, 'safety-operation-logs', '/safety/operation-logs', 'Document', 'menu', 5, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
 
 -- Seed: sys_permission
 INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (1, '刷新驾驶舱', 'dashboard:refresh', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
@@ -829,6 +897,8 @@ INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_butt
 INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (88, '导出推送数据', 'report:push:export', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
 INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (89, '查看AI事件', 'ai:event:view', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
 INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (90, '接收AI回调', 'ai:event:callback', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
+INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (91, '查看操作日志', 'log:operation:view', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
+INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (92, '导出操作日志', 'log:operation:export', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
 
 -- Seed: smart_interface_provider
 INSERT INTO `smart_interface_provider` (`id`, `provider_code`, `provider_name`, `provider_type`, `auth_type`, `base_url`, `callback_path`, `secret_encrypted`, `config_schema_json`, `enabled`, `remark`) VALUES (1, 'hikvision-sdk', '海康 SDK 报警监听', 'sdk_listener', 'none', NULL, '/smart/events/ingest/hikvision-sdk', NULL, '{"channelNo": {"type": "number", "label": "通道号"}, "armingMode": {"type": "string", "label": "布防模式"}}', 1, '系统初始化提供方') ON DUPLICATE KEY UPDATE `provider_code` = VALUES(`provider_code`), `provider_name` = VALUES(`provider_name`), `provider_type` = VALUES(`provider_type`), `auth_type` = VALUES(`auth_type`), `base_url` = VALUES(`base_url`), `callback_path` = VALUES(`callback_path`), `secret_encrypted` = VALUES(`secret_encrypted`), `config_schema_json` = VALUES(`config_schema_json`), `enabled` = VALUES(`enabled`), `remark` = VALUES(`remark`);
@@ -838,18 +908,20 @@ INSERT INTO `smart_interface_provider` (`id`, `provider_code`, `provider_name`, 
 INSERT INTO `smart_interface_capability` (`id`, `capability_code`, `capability_name`, `event_category`, `supports_push`, `supports_pull`, `supports_ai_review`, `payload_schema_json`, `default_rule_json`, `enabled`) VALUES (1, 'motion_detect', '移动侦测', 'security', 1, 0, 1, '{"eventType": "motion_detect"}', '{"alarmLevel": "medium", "sendToAi": true, "generateAlarmDirectly": false, "snapshotEnabled": true}', 1) ON DUPLICATE KEY UPDATE `capability_code` = VALUES(`capability_code`), `capability_name` = VALUES(`capability_name`), `event_category` = VALUES(`event_category`), `supports_push` = VALUES(`supports_push`), `supports_pull` = VALUES(`supports_pull`), `supports_ai_review` = VALUES(`supports_ai_review`), `payload_schema_json` = VALUES(`payload_schema_json`), `default_rule_json` = VALUES(`default_rule_json`), `enabled` = VALUES(`enabled`);
 INSERT INTO `smart_interface_capability` (`id`, `capability_code`, `capability_name`, `event_category`, `supports_push`, `supports_pull`, `supports_ai_review`, `payload_schema_json`, `default_rule_json`, `enabled`) VALUES (2, 'ai_analysis', 'AI 分析事件', 'ai', 1, 0, 0, '{"eventType": "helmet_missing"}', '{"alarmLevel": "high", "sendToAi": false, "generateAlarmDirectly": true, "snapshotEnabled": true}', 1) ON DUPLICATE KEY UPDATE `capability_code` = VALUES(`capability_code`), `capability_name` = VALUES(`capability_name`), `event_category` = VALUES(`event_category`), `supports_push` = VALUES(`supports_push`), `supports_pull` = VALUES(`supports_pull`), `supports_ai_review` = VALUES(`supports_ai_review`), `payload_schema_json` = VALUES(`payload_schema_json`), `default_rule_json` = VALUES(`default_rule_json`), `enabled` = VALUES(`enabled`);
 
--- Seed admin role and user
+-- Seed admin and user roles
 INSERT INTO `sys_role` (`id`, `role_code`, `role_name`, `status`, `remark`, `data_scope_type`, `data_scope_value`) VALUES (1, 'admin', '超级管理员', 'enabled', '系统初始化管理员角色', 'all', '*') ON DUPLICATE KEY UPDATE `role_code` = VALUES(`role_code`), `role_name` = VALUES(`role_name`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `data_scope_type` = VALUES(`data_scope_type`), `data_scope_value` = VALUES(`data_scope_value`);
+INSERT INTO `sys_role` (`id`, `role_code`, `role_name`, `status`, `remark`, `data_scope_type`, `data_scope_value`) VALUES (2, 'User', '系统操作员', 'enabled', NULL, 'custom', '{"cameraIds":[],"channelIds":[1,2],"deptIds":[1],"factoryIds":[1],"recorderIds":[],"userIds":[],"zoneIds":[1]}') ON DUPLICATE KEY UPDATE `role_code` = VALUES(`role_code`), `role_name` = VALUES(`role_name`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `data_scope_type` = VALUES(`data_scope_type`), `data_scope_value` = VALUES(`data_scope_value`);
 INSERT INTO `sys_user` (`id`, `username`, `password_hash`, `real_name`, `dept_id`, `status`) VALUES (1, 'admin', 'pbkdf2_sha256$120000$80ae8c164153c89f3ecbc837b9fb0246$WSvPE+eBuJzGAsWR1HwWsFJQEf1i5XH5vkS07A9wA8Y=', '系统管理员', 1, 'enabled') ON DUPLICATE KEY UPDATE `username` = VALUES(`username`), `password_hash` = VALUES(`password_hash`), `real_name` = VALUES(`real_name`), `dept_id` = VALUES(`dept_id`), `status` = VALUES(`status`);
+INSERT INTO `system_setting` (`id`, `setting_key`, `setting_name`, `setting_value`, `remark`) VALUES (1, 'operation_log_retention_days', '操作日志留存天数', '360', '默认保留 360 天，可按需修改') ON DUPLICATE KEY UPDATE `setting_key` = VALUES(`setting_key`), `setting_name` = VALUES(`setting_name`), `setting_value` = VALUES(`setting_value`), `remark` = VALUES(`remark`);
 
 -- Seed role relations
 DELETE FROM `sys_user_role` WHERE `user_id` = 1;
 INSERT INTO `sys_user_role` (`user_id`, `role_id`) VALUES (1, 1);
-DELETE FROM `sys_role_menu` WHERE `role_id` = 1;
-INSERT INTO `sys_role_menu` (`role_id`, `menu_id`)
-SELECT 1, `id`
-FROM `sys_menu`;
-DELETE FROM `sys_role_permission` WHERE `role_id` = 1;
-INSERT INTO `sys_role_permission` (`role_id`, `permission_id`)
-SELECT 1, `id`
-FROM `sys_permission`;
+DELETE FROM `sys_role_menu` WHERE `role_id` IN (1, 2);
+INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES
+(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (1, 16), (1, 17), (1, 18), (1, 19), (1, 20), (1, 21), (1, 22), (1, 23), (1, 24), (1, 25), (1, 26), (1, 27), (1, 28), (1, 29),
+(2, 1), (2, 2), (2, 4), (2, 5), (2, 6), (2, 8), (2, 10), (2, 11), (2, 13), (2, 14), (2, 15), (2, 16), (2, 17), (2, 18), (2, 19), (2, 20), (2, 21), (2, 22), (2, 23), (2, 24), (2, 25);
+DELETE FROM `sys_role_permission` WHERE `role_id` IN (1, 2);
+INSERT INTO `sys_role_permission` (`role_id`, `permission_id`) VALUES
+(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (1, 16), (1, 17), (1, 18), (1, 19), (1, 20), (1, 21), (1, 22), (1, 23), (1, 24), (1, 25), (1, 26), (1, 27), (1, 28), (1, 29), (1, 30), (1, 31), (1, 32), (1, 33), (1, 34), (1, 35), (1, 36), (1, 37), (1, 38), (1, 39), (1, 40), (1, 41), (1, 42), (1, 43), (1, 44), (1, 45), (1, 46), (1, 47), (1, 48), (1, 49), (1, 50), (1, 51), (1, 52), (1, 53), (1, 54), (1, 55), (1, 56), (1, 57), (1, 58), (1, 59), (1, 60), (1, 61), (1, 62), (1, 63), (1, 64), (1, 65), (1, 66), (1, 67), (1, 68), (1, 69), (1, 70), (1, 71), (1, 72), (1, 73), (1, 74), (1, 75), (1, 76), (1, 77), (1, 78), (1, 79), (1, 80), (1, 81), (1, 82), (1, 83), (1, 84), (1, 85), (1, 86), (1, 87), (1, 88), (1, 91), (1, 92),
+(2, 1), (2, 2), (2, 6), (2, 7), (2, 8), (2, 14), (2, 16), (2, 17), (2, 20), (2, 21), (2, 22), (2, 23), (2, 28), (2, 30), (2, 34), (2, 38), (2, 42), (2, 56), (2, 57), (2, 76), (2, 77), (2, 78), (2, 79), (2, 80), (2, 81), (2, 82), (2, 83), (2, 84), (2, 85), (2, 87);

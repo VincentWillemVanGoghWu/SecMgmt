@@ -14,7 +14,9 @@ import (
 
 const ContextUserIDKey = "currentUserID"
 const ContextUsernameKey = "currentUsername"
+const ContextUserRealNameKey = "currentUserRealName"
 const ContextRoleCodesKey = "currentRoleCodes"
+const ContextRoleNamesKey = "currentRoleNames"
 const ContextPermissionCodesKey = "currentPermissionCodes"
 const ContextAccessScopeKey = "currentAccessScope"
 
@@ -48,9 +50,13 @@ func Auth(secret string, repo *repository.Repository) gin.HandlerFunc {
 			return
 		}
 		roleCodes := make([]string, 0, len(roles))
+		roleNames := make([]string, 0, len(roles))
 		for _, role := range roles {
 			if code := strings.TrimSpace(role.RoleCode); code != "" {
 				roleCodes = append(roleCodes, code)
+			}
+			if roleName := strings.TrimSpace(role.RoleName); roleName != "" {
+				roleNames = append(roleNames, roleName)
 			}
 		}
 		permissionCodes, err := repo.ListPermissionCodesByUserID(claims.UserID)
@@ -76,7 +82,9 @@ func Auth(secret string, repo *repository.Repository) gin.HandlerFunc {
 
 		c.Set(ContextUserIDKey, claims.UserID)
 		c.Set(ContextUsernameKey, claims.Username)
+		c.Set(ContextUserRealNameKey, user.RealName)
 		c.Set(ContextRoleCodesKey, roleCodes)
+		c.Set(ContextRoleNamesKey, roleNames)
 		c.Set(ContextPermissionCodesKey, permissionCodes)
 		c.Set(ContextAccessScopeKey, deptScope)
 		c.Next()
@@ -143,6 +151,18 @@ func CurrentUsername(c *gin.Context) string {
 	return username
 }
 
+func CurrentUserRealName(c *gin.Context) string {
+	value, ok := c.Get(ContextUserRealNameKey)
+	if !ok {
+		return ""
+	}
+	realName, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return realName
+}
+
 func CurrentRoleCodes(c *gin.Context) []string {
 	value, ok := c.Get(ContextRoleCodesKey)
 	if !ok {
@@ -153,6 +173,18 @@ func CurrentRoleCodes(c *gin.Context) []string {
 		return nil
 	}
 	return roleCodes
+}
+
+func CurrentRoleNames(c *gin.Context) []string {
+	value, ok := c.Get(ContextRoleNamesKey)
+	if !ok {
+		return nil
+	}
+	roleNames, ok := value.([]string)
+	if !ok {
+		return nil
+	}
+	return roleNames
 }
 
 func CurrentPermissionCodes(c *gin.Context) []string {

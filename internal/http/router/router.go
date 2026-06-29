@@ -7,26 +7,29 @@ import (
 	"secmgmt_go/internal/http/handler"
 	"secmgmt_go/internal/http/middleware"
 	"secmgmt_go/internal/repository"
+	"secmgmt_go/internal/service"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
 type Handlers struct {
-	Auth     *handler.AuthHandler
-	Query    *handler.QueryHandler
-	Platform *handler.PlatformHandler
+	Auth      *handler.AuthHandler
+	Query     *handler.QueryHandler
+	Platform  *handler.PlatformHandler
+	Operation *handler.OperationLogHandler
 }
 
-func New(cfg *config.Config, repo *repository.Repository, handlers Handlers) *gin.Engine {
+func New(cfg *config.Config, repo *repository.Repository, operationLogService *service.OperationLogService, handlers Handlers) *gin.Engine {
 	engine := gin.Default()
 	engine.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
-		AllowHeaders:     []string{"Authorization", "Content-Type"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Track-Source", "X-Menu-Code", "X-Menu-Name", "X-Page-Route", "X-Page-Title", "X-Page-Component", "X-Action-Code", "X-Action-Name", "X-Operation-Type", "X-Object-Type", "X-Object-Id", "X-Object-Name", "X-Object-Location", "X-Trace-Id", "X-Client-OS"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: false,
 	}))
+	engine.Use(middleware.OperationLogger(operationLogService, repo))
 	engine.Static(cfg.MediaMountPath, cfg.MediaRootDir)
 
 	engine.GET("/healthz", handlers.Query.Health)
@@ -58,6 +61,7 @@ func New(cfg *config.Config, repo *repository.Repository, handlers Handlers) *gi
 	protected.GET("/alarms/realtime", withPermission("alarm:realtime:view", handlers.Query.ListRealtimeAlarms)...)
 	protected.GET("/alarms", withPermission("alarm:view", handlers.Query.ListAlarms)...)
 	protected.GET("/dashboard/summary", withPermission("dashboard:stats:view", handlers.Query.DashboardSummary)...)
+	protected.GET("/dashboard/operation-stats", withPermission("dashboard:stats:view", handlers.Operation.DashboardStats)...)
 	protected.GET("/users", withPermission("system:user:view", handlers.Platform.ListUsers)...)
 	protected.POST("/users", withPermission("system:user:create", handlers.Platform.CreateUser)...)
 	protected.PUT("/users/:id", withPermission("system:user:update", handlers.Platform.UpdateUser)...)
@@ -143,6 +147,10 @@ func New(cfg *config.Config, repo *repository.Repository, handlers Handlers) *gi
 	protected.GET("/dashboard/zone-ranking", withPermission("dashboard:stats:view", handlers.Platform.DashboardZoneRanking)...)
 	protected.GET("/dashboard/device-status", withPermission("dashboard:stats:view", handlers.Platform.DashboardDeviceStatus)...)
 
+	protected.POST("/operation-logs/track", withPermission("log:operation:view", handlers.Operation.Track)...)
+	protected.GET("/operation-logs", withPermission("log:operation:view", handlers.Operation.List)...)
+	protected.GET("/operation-logs/:id", withPermission("log:operation:view", handlers.Operation.Detail)...)
+
 	protected.GET("/reports/alarms", withPermission("report:alarm:view", handlers.Platform.AlarmReport)...)
 	protected.GET("/reports/devices", withPermission("report:device:view", handlers.Platform.DeviceReport)...)
 	protected.GET("/reports/push", withPermission("report:push:view", handlers.Platform.PushReport)...)
@@ -196,6 +204,7 @@ func New(cfg *config.Config, repo *repository.Repository, handlers Handlers) *gi
 	protected.GET("/export/alarms", withPermission("report:alarm:export", handlers.Platform.ExportAlarms)...)
 	protected.GET("/export/device-status", withPermission("report:device:export", handlers.Platform.ExportDeviceStatus)...)
 	protected.GET("/export/push-logs", withPermission("report:push:export", handlers.Platform.ExportPushLogs)...)
+	protected.GET("/export/operation-logs", withPermission("log:operation:export", handlers.Operation.Export)...)
 
 	protected.GET("/ai/config", withPermission("ai:event:view", handlers.Platform.GetAIConfig)...)
 	protected.POST("/ai/events/callback", handlers.Platform.CreateAIEventCallback)

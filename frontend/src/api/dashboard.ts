@@ -3,6 +3,7 @@ import type {
   AlarmReportData,
   CategoryChart,
   DashboardDeviceStatus,
+  OperationDashboardStats,
   DashboardSummary,
   DeviceReportData,
   NameValueChart,
@@ -21,6 +22,9 @@ export const getDashboardAlarmTrendApi = async (params?: Record<string, unknown>
 
 export const getDashboardAlarmTypesApi = async (params?: Record<string, unknown>): Promise<NameValueChart> =>
   unwrap(await http.get<ApiResponse<NameValueChart>>("/dashboard/alarm-types", { params }))
+
+export const getDashboardOperationStatsApi = async (params?: Record<string, unknown>): Promise<OperationDashboardStats> =>
+  unwrap(await http.get<ApiResponse<OperationDashboardStats>>("/dashboard/operation-stats", { params }))
 
 export const getDashboardZoneRankingApi = async (params?: Record<string, unknown>): Promise<ZoneRankingChart> =>
   unwrap(await http.get<ApiResponse<ZoneRankingChart>>("/dashboard/zone-ranking", { params }))

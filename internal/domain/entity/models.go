@@ -243,6 +243,63 @@ type DeviceStatusLog struct {
 
 func (DeviceStatusLog) TableName() string { return "device_status_log" }
 
+type OperationLog struct {
+	ID               uint      `gorm:"column:id;primaryKey"`
+	TraceID          string    `gorm:"column:trace_id"`
+	Source           string    `gorm:"column:source"`
+	OperatorID       *uint     `gorm:"column:operator_id"`
+	OperatorUsername string    `gorm:"column:operator_username"`
+	OperatorRealName string    `gorm:"column:operator_real_name"`
+	RoleCodes        string    `gorm:"column:role_codes"`
+	RoleNames        string    `gorm:"column:role_names"`
+	ClientIP         string    `gorm:"column:client_ip"`
+	IPLocation       string    `gorm:"column:ip_location"`
+	UserAgent        string    `gorm:"column:user_agent"`
+	OSName           string    `gorm:"column:os_name"`
+	MenuCode         string    `gorm:"column:menu_code"`
+	MenuName         string    `gorm:"column:menu_name"`
+	RoutePath        string    `gorm:"column:route_path"`
+	PageTitle        string    `gorm:"column:page_title"`
+	PageComponent    string    `gorm:"column:page_component"`
+	ActionCode       string    `gorm:"column:action_code"`
+	ActionName       string    `gorm:"column:action_name"`
+	OperationType    string    `gorm:"column:operation_type"`
+	ObjectType       string    `gorm:"column:object_type"`
+	ObjectID         string    `gorm:"column:object_id"`
+	ObjectName       string    `gorm:"column:object_name"`
+	ObjectLocation   string    `gorm:"column:object_location"`
+	RequestMethod    string    `gorm:"column:request_method"`
+	RequestPath      string    `gorm:"column:request_path"`
+	RequestQuery     string    `gorm:"column:request_query"`
+	RequestParams    string    `gorm:"column:request_params"`
+	DevicePointInfo  string    `gorm:"column:device_point_info"`
+	BeforeSnapshot   string    `gorm:"column:before_snapshot"`
+	AfterSnapshot    string    `gorm:"column:after_snapshot"`
+	ErrorStack       string    `gorm:"column:error_stack"`
+	ResultStatus     string    `gorm:"column:result_status"`
+	ResponseStatus   int       `gorm:"column:response_status"`
+	DurationMs       int64     `gorm:"column:duration_ms"`
+	StoragePartition string    `gorm:"column:storage_partition"`
+	RetentionDays    int       `gorm:"column:retention_days"`
+	ExtraJSON        string    `gorm:"column:extra_json"`
+	OperationTime    time.Time `gorm:"column:operation_time"`
+	CreatedAt        time.Time `gorm:"column:created_at"`
+}
+
+func (OperationLog) TableName() string { return "operation_log" }
+
+type SystemSetting struct {
+	ID           uint      `gorm:"column:id;primaryKey"`
+	SettingKey   string    `gorm:"column:setting_key"`
+	SettingName  string    `gorm:"column:setting_name"`
+	SettingValue string    `gorm:"column:setting_value"`
+	Remark       string    `gorm:"column:remark"`
+	CreatedAt    time.Time `gorm:"column:created_at"`
+	UpdatedAt    time.Time `gorm:"column:updated_at"`
+}
+
+func (SystemSetting) TableName() string { return "system_setting" }
+
 type PushConfig struct {
 	ID                     uint      `gorm:"column:id;primaryKey"`
 	ConfigName             string    `gorm:"column:config_name"`

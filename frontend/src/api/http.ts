@@ -1,6 +1,8 @@
 import axios from "axios"
 import { ElMessage } from "element-plus"
 
+import { getOperationTrackingHeaders } from "../services/operationLogTracker"
+
 const TOKEN_KEY = "steel-monitor-access-token"
 export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api"
 
@@ -61,6 +63,15 @@ http.interceptors.request.use((config) => {
   const token = window.localStorage.getItem(TOKEN_KEY)
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  const requestUrl = String(config.url ?? "")
+  if (!requestUrl.includes("/operation-logs/track")) {
+    const trackingHeaders = getOperationTrackingHeaders()
+    Object.entries(trackingHeaders).forEach(([key, value]) => {
+      if (value) {
+        config.headers[key] = value
+      }
+    })
   }
   return config
 })

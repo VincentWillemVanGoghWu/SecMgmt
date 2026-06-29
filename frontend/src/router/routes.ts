@@ -5,6 +5,7 @@ const LoginView = () => import('../views/auth/LoginView.vue')
 const DashboardView = () => import('../views/dashboard/DashboardView.vue')
 const ModulePageView = () => import('../views/shared/ModulePageView.vue')
 const RealtimeAlarmView = () => import('../views/safety/RealtimeAlarmView.vue')
+const OperationLogView = () => import('../views/safety/OperationLogView.vue')
 const FactoryManagementView = () => import('../views/master-data/FactoryManagementView.vue')
 const ZoneManagementView = () => import('../views/master-data/ZoneManagementView.vue')
 const DeptManagementView = () => import('../views/master-data/DeptManagementView.vue')
@@ -62,6 +63,12 @@ export const appRoutes: RouteRecordRaw[] = [
         name: 'safety-alarm-stats',
         component: AlarmStatsView,
         meta: { title: '安全日志 / 告警统计', requiresAuth: true },
+      },
+      {
+        path: 'safety/operation-logs',
+        name: 'safety-operation-logs',
+        component: OperationLogView,
+        meta: { title: '安全日志 / 操作日志', requiresAuth: true },
       },
       {
         path: 'linkage',
