@@ -11,6 +11,15 @@ import (
 	"github.com/spf13/viper"
 )
 
+const (
+	defaultPushEmailSMTPHost = "smtp.163.com"
+	defaultPushEmailSMTPPort = 465
+	defaultPushEmailUsername = "18017751995@163.com"
+	defaultPushEmailPassword = "MLY39eMywrC3KLG8"
+	defaultPushEmailFrom     = "18017751995@163.com"
+	defaultPushEmailFromName = "SMARTLINK(7*24\u5c0f\u65f6\u6316\u6398\u673a)"
+)
+
 type Config struct {
 	AppName                string
 	AppEnv                 string
@@ -57,12 +66,12 @@ func Load(rootDir string) (*Config, error) {
 		BackendPublicBaseURL:   readString("BACKEND_PUBLIC_BASE_URL", "http://127.0.0.1:8000"),
 		AICallbackSecret:       readString("AI_CALLBACK_SECRET", "change-ai-signature-secret"),
 		PushHTTPTimeoutSeconds: readInt("PUSH_HTTP_TIMEOUT_SECONDS", 10),
-		PushEmailSMTPHost:      readString("PUSH_EMAIL_SMTP_HOST", ""),
-		PushEmailSMTPPort:      readInt("PUSH_EMAIL_SMTP_PORT", 465),
-		PushEmailUsername:      readString("PUSH_EMAIL_SMTP_USERNAME", ""),
-		PushEmailPassword:      readString("PUSH_EMAIL_SMTP_PASSWORD", ""),
-		PushEmailFrom:          readString("PUSH_EMAIL_FROM", ""),
-		PushEmailFromName:      readString("PUSH_EMAIL_FROM_NAME", ""),
+		PushEmailSMTPHost:      readString("PUSH_EMAIL_SMTP_HOST", defaultPushEmailSMTPHost),
+		PushEmailSMTPPort:      readInt("PUSH_EMAIL_SMTP_PORT", defaultPushEmailSMTPPort),
+		PushEmailUsername:      readString("PUSH_EMAIL_SMTP_USERNAME", defaultPushEmailUsername),
+		PushEmailPassword:      readString("PUSH_EMAIL_SMTP_PASSWORD", defaultPushEmailPassword),
+		PushEmailFrom:          readString("PUSH_EMAIL_FROM", defaultPushEmailFrom),
+		PushEmailFromName:      readString("PUSH_EMAIL_FROM_NAME", defaultPushEmailFromName),
 	}
 
 	if strings.TrimSpace(cfg.MySQLDSN) == "" {

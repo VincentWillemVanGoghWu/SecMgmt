@@ -664,7 +664,7 @@ onMounted(async () => {
           <el-input v-model="formState.templateId" placeholder="例如 tmpl-alarm-001" />
         </el-form-item>
         <el-form-item v-if="formState.providerType === 'email'" label="发件配置">
-          <el-input model-value=".env 中的 PUSH_EMAIL_* 配置项" disabled />
+          <el-input model-value="后端内置 PUSH_EMAIL_* 配置项" disabled />
         </el-form-item>
         <el-form-item v-if="formState.providerType === 'wechat'" label="接收人 OpenID" prop="receiverOpenIdsText">
           <el-input
