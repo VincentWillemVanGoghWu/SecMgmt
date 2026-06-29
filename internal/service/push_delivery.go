@@ -90,7 +90,7 @@ func dispatchAlarmPushes(db *gorm.DB, cfg *config.Config, logger *zap.Logger, al
 	now := time.Now()
 	ctx := resolveAlarmPushContext(db, alarm)
 	for _, config := range configs {
-		if len(allowedChannels) > 0 && !containsStringFold(allowedChannels, config.ProviderType) {
+		if len(allowedChannels) > 0 && !pushChannelAllowed(allowedChannels, config.ProviderType) {
 			continue
 		}
 		if !pushConfigMatchesAlarm(config, alarm, now) {
@@ -639,6 +639,29 @@ func containsStringFold(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func pushChannelAllowed(values []string, target string) bool {
+	normalizedTarget := normalizePushChannel(target)
+	for _, value := range values {
+		if normalizePushChannel(value) == normalizedTarget {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizePushChannel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "email", "mail", "smtp", "邮件", "邮箱":
+		return "email"
+	case "wechat", "weixin", "微信":
+		return "wechat"
+	case "dingtalk", "dingding", "钉钉":
+		return "dingtalk"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
 }
 
 func buildPushFailureMessage(summary, detail string) string {

@@ -3133,6 +3133,7 @@ func (s *PlatformService) GetSmartBindingDetail(id uint) (map[string]any, error)
 }
 
 func (s *PlatformService) CreateSmartBindingRule(bindingID uint, payload SmartBindingRulePayload) (map[string]any, error) {
+	pushChannels := normalizePushChannels(payload.PushChannels)
 	item := entity.SmartBindingRule{
 		BindingID:             bindingID,
 		RuleName:              payload.RuleName,
@@ -3148,7 +3149,7 @@ func (s *PlatformService) CreateSmartBindingRule(bindingID uint, payload SmartBi
 		RecordPreSeconds:      payload.RecordPreSeconds,
 		RecordPostSeconds:     payload.RecordPostSeconds,
 		PushEnabled:           payload.PushEnabled,
-		PushChannelsJSON:      encodeJSON(payload.PushChannels),
+		PushChannelsJSON:      encodeJSON(pushChannels),
 		SendToAI:              payload.SendToAI,
 		AIFlowCode:            valueOrEmpty(payload.AIFlowCode),
 		GenerateAlarmDirectly: payload.GenerateAlarmDirectly,
@@ -3165,6 +3166,7 @@ func (s *PlatformService) UpdateSmartBindingRule(ruleID uint, payload SmartBindi
 	if err := s.db().First(&item, ruleID).Error; err != nil {
 		return nil, err
 	}
+	pushChannels := normalizePushChannels(payload.PushChannels)
 	item.RuleName = payload.RuleName
 	item.Enabled = payload.Enabled
 	item.AlarmEnabled = payload.AlarmEnabled
@@ -3178,7 +3180,7 @@ func (s *PlatformService) UpdateSmartBindingRule(ruleID uint, payload SmartBindi
 	item.RecordPreSeconds = payload.RecordPreSeconds
 	item.RecordPostSeconds = payload.RecordPostSeconds
 	item.PushEnabled = payload.PushEnabled
-	item.PushChannelsJSON = encodeJSON(payload.PushChannels)
+	item.PushChannelsJSON = encodeJSON(pushChannels)
 	item.SendToAI = payload.SendToAI
 	item.AIFlowCode = valueOrEmpty(payload.AIFlowCode)
 	item.GenerateAlarmDirectly = payload.GenerateAlarmDirectly
@@ -5012,6 +5014,23 @@ func normalizePushConfigPayload(payload *PushConfigPayload) error {
 		return fmt.Errorf("不支持的推送渠道")
 	}
 	return nil
+}
+
+func normalizePushChannels(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		normalized := normalizePushChannel(value)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result
 }
 
 func containsString(values []string, target string) bool {

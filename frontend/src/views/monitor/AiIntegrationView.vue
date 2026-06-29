@@ -139,7 +139,7 @@ const ruleForm = reactive({
   recordPreSeconds: 5,
   recordPostSeconds: 10,
   pushEnabled: false,
-  pushChannelsText: '',
+  pushChannels: [] as string[],
   sendToAi: false,
   aiFlowCode: '',
   generateAlarmDirectly: true,
@@ -163,6 +163,11 @@ const enabledOptions = [
   { label: '全部', value: '' },
   { label: '启用', value: 'true' },
   { label: '停用', value: 'false' },
+]
+
+const pushChannelOptions = [
+  { label: '邮件', value: 'email' },
+  { label: '微信', value: 'wechat' },
 ]
 
 const sourceTypeOptions = [
@@ -457,7 +462,7 @@ const resetRuleForm = () => {
   ruleForm.recordPreSeconds = 5
   ruleForm.recordPostSeconds = 10
   ruleForm.pushEnabled = false
-  ruleForm.pushChannelsText = ''
+  ruleForm.pushChannels = []
   ruleForm.sendToAi = false
   ruleForm.aiFlowCode = ''
   ruleForm.generateAlarmDirectly = true
@@ -718,7 +723,7 @@ const openEditRuleDialog = (rule: SmartBindingRuleRecord) => {
   ruleForm.recordPreSeconds = rule.recordPreSeconds
   ruleForm.recordPostSeconds = rule.recordPostSeconds
   ruleForm.pushEnabled = rule.pushEnabled
-  ruleForm.pushChannelsText = rule.pushChannels.join(', ')
+  ruleForm.pushChannels = [...rule.pushChannels]
   ruleForm.sendToAi = rule.sendToAi
   ruleForm.aiFlowCode = rule.aiFlowCode ?? ''
   ruleForm.generateAlarmDirectly = rule.generateAlarmDirectly
@@ -745,10 +750,7 @@ const submitRule = async () => {
       recordPreSeconds: Number(ruleForm.recordPreSeconds),
       recordPostSeconds: Number(ruleForm.recordPostSeconds),
       pushEnabled: ruleForm.pushEnabled,
-      pushChannels: ruleForm.pushChannelsText
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean),
+      pushChannels: [...ruleForm.pushChannels],
       sendToAi: ruleForm.sendToAi,
       aiFlowCode: ruleForm.aiFlowCode.trim() || null,
       generateAlarmDirectly: ruleForm.generateAlarmDirectly,
@@ -1373,7 +1375,9 @@ onMounted(async () => {
         </div>
         <div class="app-field smart-interface-page__full-row">
           <label>推送渠道</label>
-          <input v-model="ruleForm.pushChannelsText" type="text" placeholder="多个用逗号分隔，如 dingtalk,wechat" />
+          <el-select v-model="ruleForm.pushChannels" multiple clearable placeholder="请选择推送渠道" style="width: 100%">
+            <el-option v-for="item in pushChannelOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
         </div>
         <div class="app-field smart-interface-page__full-row">
           <label>备注</label>
