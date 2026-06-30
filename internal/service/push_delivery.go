@@ -629,7 +629,7 @@ func isPushRateLimited(db *gorm.DB, config entity.PushConfig, now time.Time) boo
 	var count int64
 	cutoff := now.Add(-time.Duration(config.RateLimitWindowSeconds) * time.Second)
 	_ = db.Model(&entity.AlarmPushLog{}).
-		Where("push_config_id = ? AND pushed_at >= ?", config.ID, cutoff).
+		Where("push_config_id = ? AND pushed_at >= ? AND status IN ?", config.ID, cutoff, []string{"success", "failed"}).
 		Count(&count).Error
 	return count >= int64(config.RateLimitMaxCount)
 }
