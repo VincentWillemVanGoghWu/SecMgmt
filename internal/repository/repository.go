@@ -1,7 +1,6 @@
 package repository
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -334,40 +333,53 @@ func (r *Repository) GetDashboardSummary(startAt, endAt *time.Time, accessScope 
 	startOfDay := time.Now().Truncate(24 * time.Hour)
 	row := &DashboardSummaryRow{}
 
-	todayQuery := r.db.Table("alarm_record")
-	todayQuery = applyAlarmScopeToTable(todayQuery, "alarm_record", accessScope)
+	alarmQuery := r.db.Table("alarm_record")
+	alarmQuery = applyAlarmScopeToTable(alarmQuery, "alarm_record", accessScope)
 	if startAt != nil || endAt != nil {
-		todayQuery = applyTimeRange(todayQuery, "alarm_time", startAt, endAt)
-	} else {
-		todayQuery = todayQuery.Where("alarm_time >= ?", startOfDay)
-	}
-	if err := todayQuery.Count(&row.TodayAlarmCount).Error; err != nil {
-		return nil, fmt.Errorf("count today's alarms: %w", err)
-	}
-	if err := applyTimeRange(applyAlarmScopeToTable(r.db.Table("alarm_record").Where("status = ?", "pending"), "alarm_record", accessScope), "alarm_time", startAt, endAt).Count(&row.PendingAlarmCount).Error; err != nil {
+		alarmQuery = applyTimeRange(alarmQuery, "alarm_time", startAt, endAt)
+		if err := alarmQuery.Select(`count(*) AS today_alarm_count,
+			coalesce(sum(case when status = 'pending' then 1 else 0 end), 0) AS pending_alarm_count,
+			coalesce(sum(case when alarm_level = 'critical' then 1 else 0 end), 0) AS critical_alarm_count`).
+			Scan(row).Error; err != nil {
+			return nil, err
+		}
+	} else if err := alarmQuery.Select(`coalesce(sum(case when alarm_time >= ? then 1 else 0 end), 0) AS today_alarm_count,
+		coalesce(sum(case when status = 'pending' then 1 else 0 end), 0) AS pending_alarm_count,
+		coalesce(sum(case when alarm_level = 'critical' then 1 else 0 end), 0) AS critical_alarm_count`, startOfDay).
+		Scan(row).Error; err != nil {
 		return nil, err
 	}
-	if err := applyTimeRange(applyAlarmScopeToTable(r.db.Table("alarm_record").Where("alarm_level = ?", "critical"), "alarm_record", accessScope), "alarm_time", startAt, endAt).Count(&row.CriticalAlarmCount).Error; err != nil {
+
+	pushQuery := applyTimeRange(applyPushScopeToTable(r.db.Table("alarm_push_log"), "alarm_push_log", accessScope), "pushed_at", startAt, endAt)
+	if err := pushQuery.Select(`coalesce(sum(case when status = 'success' then 1 else 0 end), 0) AS push_success_count,
+		coalesce(sum(case when status = 'failed' then 1 else 0 end), 0) AS push_failed_count`).
+		Scan(row).Error; err != nil {
 		return nil, err
 	}
-	if err := applyTimeRange(applyPushScopeToTable(r.db.Table("alarm_push_log").Where("status = ?", "success"), "alarm_push_log", accessScope), "pushed_at", startAt, endAt).Count(&row.PushSuccessCount).Error; err != nil {
+
+	var cameraRow struct {
+		Online int64 `gorm:"column:online"`
+		Total  int64 `gorm:"column:total"`
+	}
+	if err := applyCameraScopeToTable(r.db.Table("camera_device"), "camera_device", accessScope).
+		Select("count(*) AS total, coalesce(sum(case when status = 'online' then 1 else 0 end), 0) AS online").
+		Scan(&cameraRow).Error; err != nil {
 		return nil, err
 	}
-	if err := applyTimeRange(applyPushScopeToTable(r.db.Table("alarm_push_log").Where("status = ?", "failed"), "alarm_push_log", accessScope), "pushed_at", startAt, endAt).Count(&row.PushFailedCount).Error; err != nil {
+	row.CameraOnlineCount = cameraRow.Online
+	row.CameraTotalCount = cameraRow.Total
+
+	var recorderRow struct {
+		Online int64 `gorm:"column:online"`
+		Total  int64 `gorm:"column:total"`
+	}
+	if err := applyRecorderScopeToTable(r.db.Table("recorder_device"), "recorder_device", accessScope).
+		Select("count(*) AS total, coalesce(sum(case when status = 'online' then 1 else 0 end), 0) AS online").
+		Scan(&recorderRow).Error; err != nil {
 		return nil, err
 	}
-	if err := applyCameraScopeToTable(r.db.Table("camera_device").Where("status = ?", "online"), "camera_device", accessScope).Count(&row.CameraOnlineCount).Error; err != nil {
-		return nil, err
-	}
-	if err := applyCameraScopeToTable(r.db.Table("camera_device"), "camera_device", accessScope).Count(&row.CameraTotalCount).Error; err != nil {
-		return nil, err
-	}
-	if err := applyRecorderScopeToTable(r.db.Table("recorder_device").Where("status = ?", "online"), "recorder_device", accessScope).Count(&row.RecorderOnlineCount).Error; err != nil {
-		return nil, err
-	}
-	if err := applyRecorderScopeToTable(r.db.Table("recorder_device"), "recorder_device", accessScope).Count(&row.RecorderTotalCount).Error; err != nil {
-		return nil, err
-	}
+	row.RecorderOnlineCount = recorderRow.Online
+	row.RecorderTotalCount = recorderRow.Total
 
 	return row, nil
 }

@@ -11,7 +11,6 @@ import type {
   CameraRecord,
   CameraRecordingConfig,
   CameraSdkConfig,
-  CameraStatusCheckData,
   CameraSubmitPayload,
   CameraNetworkConfig,
   CameraUserAccountUpsert,
@@ -50,9 +49,6 @@ export const deleteCameraApi = async (id: number): Promise<void> => {
 
 export const testCameraConnectionApi = async (id: number): Promise<CameraConnectionTestData> =>
   unwrap(await http.post<ApiResponse<CameraConnectionTestData>>(`/cameras/${id}/test`))
-
-export const checkCameraStatusApi = async (id: number): Promise<CameraStatusCheckData> =>
-  unwrap(await http.post<ApiResponse<CameraStatusCheckData>>(`/cameras/${id}/status/check`))
 
 export const getCameraSdkConfigApi = async (id: number): Promise<CameraSdkConfig> =>
   unwrap(await http.get<ApiResponse<CameraSdkConfig>>(`/cameras/${id}/sdk-config`))

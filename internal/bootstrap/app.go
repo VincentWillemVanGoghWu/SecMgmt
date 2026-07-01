@@ -49,8 +49,13 @@ func Build(rootDir string) (*App, error) {
 		return nil, err
 	}
 	stopOperationLogCleanup := operationLogService.StartCleanupJob()
+	deviceCheckScheduler := service.NewDeviceCheckScheduler(platformService, logger)
+	stopDeviceCheckScheduler := deviceCheckScheduler.Start()
 	hikvisionBridgeService := service.NewHikvisionAlarmBridgeService(cfg, repo, logger)
 	platformService.SetHikvisionAlarmBridge(hikvisionBridgeService)
+	smartBridgeReconnectService := service.NewSmartBridgeReconnectService(hikvisionBridgeService, logger)
+	platformService.SetSmartBridgeReconnectService(smartBridgeReconnectService)
+	stopSmartBridgeReconnect := smartBridgeReconnectService.Start()
 	if err := hikvisionBridgeService.Start(); err != nil {
 		logger.Warn("start hikvision alarm bridge", zap.Error(err))
 	}
@@ -67,6 +72,8 @@ func Build(rootDir string) (*App, error) {
 		Logger: logger,
 		Router: engine,
 		Close: func() {
+			stopSmartBridgeReconnect()
+			stopDeviceCheckScheduler()
 			stopOperationLogCleanup()
 			hikvisionBridgeService.Stop()
 		},

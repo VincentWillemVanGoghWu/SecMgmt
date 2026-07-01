@@ -120,6 +120,36 @@ export interface SmartBindingTestResult {
   latestAlarm: SmartBindingLatestAlarm
 }
 
+export interface SmartBridgeStatusRecord {
+  bridge: {
+    running: boolean
+    sessionCount: number
+    bindingCount: number
+    skippedBindingCount: number
+    mergedBindingCount: number
+    lastError?: string | null
+    sessions: Array<Record<string, unknown>>
+  }
+  reconnect: {
+    taskCount: number
+    pendingCount?: number
+    runningCount?: number
+    successCount?: number
+    failedCount?: number
+    tasks: Array<Record<string, unknown>>
+  }
+}
+
+export interface SmartBindingReconnectResult {
+  queued: boolean
+  bindingIds: number[]
+  sessionKey: string
+  deviceType: string
+  deviceId: number
+  cycleKey: string
+  message: string
+}
+
 export interface SmartCapabilityRecord {
   id: number
   capabilityCode: string
@@ -181,7 +211,7 @@ export interface SmartBindingRuleSubmitPayload {
 }
 
 export interface SmartBindingRecord {
-  id: number
+	id: number
   providerId: number
   providerCode: string
   providerName: string
@@ -200,11 +230,18 @@ export interface SmartBindingRecord {
   ruleCount: number
   lastEventTime?: string | null
   updatedAt: string
-  createdAt: string
+	createdAt: string
+}
+
+export interface SmartBindingPageRecord {
+	items: SmartBindingRecord[]
+	total: number
+	page: number
+	pageSize: number
 }
 
 export interface SmartBindingSubmitPayload {
-  providerCode: string
+	providerCode: string
   capabilityCode: string
   sourceType: string
   sourceId: number
@@ -259,7 +296,7 @@ export interface SmartAiReviewResultRecord {
 }
 
 export interface SmartAiTaskRecord {
-  id: number
+	id: number
   taskNo: string
   smartEventId: number
   aiFlowCode: string
@@ -272,7 +309,14 @@ export interface SmartAiTaskRecord {
   finishedAt?: string | null
   errorMessage?: string | null
   createdAt: string
-  latestResult?: SmartAiReviewResultRecord | null
+	latestResult?: SmartAiReviewResultRecord | null
+}
+
+export interface SmartAiTaskPageRecord {
+  items: SmartAiTaskRecord[]
+  total: number
+  page: number
+  pageSize: number
 }
 
 export interface SmartEventRecord {
@@ -312,6 +356,39 @@ export interface SmartEventRecord {
 
 export interface SmartEventPageRecord {
   items: SmartEventRecord[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface SmartBridgeReconnectLogRecord {
+  id: number
+  taskKey: string
+  cycleKey: string
+  triggerReason: string
+  action: string
+  status: string
+  deviceType: string
+  deviceId: number
+  sessionKey: string
+  bindingIds: number[]
+  attempt: number
+  maxAttempts: number
+  nextRunAt?: string | null
+  detail?: string | null
+  lastError?: string | null
+  createdAt: string
+}
+
+export interface SmartBridgeReconnectLogPageRecord {
+  items: SmartBridgeReconnectLogRecord[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface SmartRawEventPageRecord {
+  items: SmartRawEventRecord[]
   total: number
   page: number
   pageSize: number

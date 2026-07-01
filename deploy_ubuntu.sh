@@ -952,6 +952,51 @@ SET @sql := IF(@idx = 0, 'CREATE INDEX ix_alarm_record_dedup_last_event_time_id 
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
+
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.statistics
+  WHERE table_schema = DATABASE() AND table_name = 'alarm_push_log' AND index_name = 'ix_alarm_push_log_config_status_time_id'
+);
+SET @sql := IF(@idx = 0, 'CREATE INDEX ix_alarm_push_log_config_status_time_id ON alarm_push_log (push_config_id, status, pushed_at, id)', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.statistics
+  WHERE table_schema = DATABASE() AND table_name = 'device_status_log' AND index_name = 'ix_device_status_log_type_device_time_id'
+);
+SET @sql := IF(@idx = 0, 'CREATE INDEX ix_device_status_log_type_device_time_id ON device_status_log (device_type, device_id, checked_at, id)', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.statistics
+  WHERE table_schema = DATABASE() AND table_name = 'device_status_log' AND index_name = 'ix_device_status_log_type_status_time_id'
+);
+SET @sql := IF(@idx = 0, 'CREATE INDEX ix_device_status_log_type_status_time_id ON device_status_log (device_type, new_status, checked_at, id)', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.statistics
+  WHERE table_schema = DATABASE() AND table_name = 'ai_review_task' AND index_name = 'ix_ai_review_task_flow_submitted_id'
+);
+SET @sql := IF(@idx = 0, 'CREATE INDEX ix_ai_review_task_flow_submitted_id ON ai_review_task (ai_flow_code, submitted_at, id)', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.statistics
+  WHERE table_schema = DATABASE() AND table_name = 'ai_review_task' AND index_name = 'ix_ai_review_task_status_submitted_id'
+);
+SET @sql := IF(@idx = 0, 'CREATE INDEX ix_ai_review_task_status_submitted_id ON ai_review_task (status, submitted_at, id)', 'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 EOF
 }
 

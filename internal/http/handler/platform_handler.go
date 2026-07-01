@@ -1045,6 +1045,105 @@ func (h *PlatformHandler) CheckAllDevicesStatus(c *gin.Context) {
 	response.OK(c, data)
 }
 
+func (h *PlatformHandler) ListDeviceCheckSchedules(c *gin.Context) {
+	data, err := h.platformService.ListDeviceCheckSchedules()
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) CreateDeviceCheckSchedule(c *gin.Context) {
+	var payload service.DeviceCheckSchedulePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := h.platformService.CreateDeviceCheckSchedule(payload)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) UpdateDeviceCheckSchedule(c *gin.Context) {
+	id, ok := pathUint(c, "id")
+	if !ok {
+		return
+	}
+	var payload service.DeviceCheckSchedulePayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := h.platformService.UpdateDeviceCheckSchedule(id, payload)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) UpdateDeviceCheckScheduleStatus(c *gin.Context) {
+	id, ok := pathUint(c, "id")
+	if !ok {
+		return
+	}
+	var payload service.DeviceCheckScheduleStatusPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := h.platformService.UpdateDeviceCheckScheduleStatus(id, payload.Enabled)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) DeleteDeviceCheckSchedule(c *gin.Context) {
+	id, ok := pathUint(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.platformService.DeleteDeviceCheckSchedule(id); err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, gin.H{})
+}
+
+func (h *PlatformHandler) RunDeviceCheckScheduleNow(c *gin.Context) {
+	id, ok := pathUint(c, "id")
+	if !ok {
+		return
+	}
+	data, err := h.platformService.RunDeviceCheckScheduleNow(id)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) ListDeviceCheckRuns(c *gin.Context) {
+	page, pageSize := readPageParams(c)
+	scheduleID, err := readOptionalUintQuery(c, "schedule_id")
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid schedule_id")
+		return
+	}
+	data, err := h.platformService.ListDeviceCheckRuns(page, pageSize, scheduleID)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
 func (h *PlatformHandler) GetAlarmDetail(c *gin.Context) {
 	id, ok := pathUint(c, "id")
 	if !ok {
@@ -1368,6 +1467,15 @@ func (h *PlatformHandler) TestSmartProvider(c *gin.Context) {
 	response.OK(c, data)
 }
 
+func (h *PlatformHandler) GetSmartBridgeStatus(c *gin.Context) {
+	data, err := h.platformService.GetSmartBridgeStatus()
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
 func (h *PlatformHandler) ListSmartCapabilities(c *gin.Context) {
 	data, err := h.platformService.ListSmartCapabilities()
 	if err != nil {
@@ -1378,6 +1486,7 @@ func (h *PlatformHandler) ListSmartCapabilities(c *gin.Context) {
 }
 
 func (h *PlatformHandler) ListSmartBindings(c *gin.Context) {
+	page, pageSize := readPageParams(c)
 	filter := service.SmartBindingListFilter{
 		SourceType:     strings.TrimSpace(c.Query("source_type")),
 		ProviderCode:   strings.TrimSpace(c.Query("provider_code")),
@@ -1391,7 +1500,7 @@ func (h *PlatformHandler) ListSmartBindings(c *gin.Context) {
 		}
 		filter.Enabled = &enabled
 	}
-	data, err := h.platformService.ListSmartBindings(filter)
+	data, err := h.platformService.ListSmartBindings(page, pageSize, filter)
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1419,6 +1528,19 @@ func (h *PlatformHandler) TestSmartBinding(c *gin.Context) {
 		return
 	}
 	data, err := h.platformService.TestSmartBinding(id)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) ReconnectSmartBinding(c *gin.Context) {
+	id, ok := pathUint(c, "id")
+	if !ok {
+		return
+	}
+	data, err := h.platformService.ReconnectSmartBinding(id)
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1539,7 +1661,22 @@ func (h *PlatformHandler) IngestSmartProviderEvent(c *gin.Context) {
 }
 
 func (h *PlatformHandler) ListSmartRawEvents(c *gin.Context) {
-	data, err := h.platformService.ListSmartRawEvents()
+	page, pageSize := readPageParams(c)
+	filter := service.SmartRawEventListFilter{
+		ProviderCode:   strings.TrimSpace(c.Query("provider_code")),
+		CapabilityCode: strings.TrimSpace(c.Query("capability_code")),
+		ParseStatus:    strings.TrimSpace(c.Query("parse_status")),
+		SourceType:     strings.TrimSpace(c.Query("source_type")),
+	}
+	if raw := strings.TrimSpace(c.Query("recent_days")); raw != "" {
+		recentDays, err := strconv.Atoi(raw)
+		if err != nil || recentDays < 0 {
+			response.Error(c, http.StatusBadRequest, "invalid recent_days")
+			return
+		}
+		filter.RecentDays = recentDays
+	}
+	data, err := h.platformService.ListSmartRawEvents(page, pageSize, filter)
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1566,6 +1703,35 @@ func (h *PlatformHandler) ListSmartEvents(c *gin.Context) {
 	}
 	filter.AccessScope = middleware.CurrentAccessScope(c)
 	data, err := h.platformService.ListSmartEvents(page, pageSize, filter)
+	if err != nil {
+		handlePlatformError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+func (h *PlatformHandler) ListSmartBridgeReconnectLogs(c *gin.Context) {
+	page, pageSize := readPageParams(c)
+	filter := service.SmartBridgeReconnectLogListFilter{
+		Status:        strings.TrimSpace(c.Query("status")),
+		Action:        strings.TrimSpace(c.Query("action")),
+		TriggerReason: strings.TrimSpace(c.Query("trigger_reason")),
+		DeviceType:    strings.TrimSpace(c.Query("device_type")),
+		SessionKey:    strings.TrimSpace(c.Query("session_key")),
+	}
+	if raw := strings.TrimSpace(c.Query("device_id")); raw != "" {
+		deviceID, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "invalid device_id")
+			return
+		}
+		filter.DeviceID = uint(deviceID)
+	}
+	startAt, startOK := firstTimeQuery(c, "start_at")
+	endAt, endOK := firstTimeQuery(c, "end_at")
+	filter.StartAt = optionalTime(startAt, startOK)
+	filter.EndAt = optionalTime(endAt, endOK)
+	data, err := h.platformService.ListSmartBridgeReconnectLogs(page, pageSize, filter)
 	if err != nil {
 		handlePlatformError(c, err)
 		return
@@ -1605,7 +1771,20 @@ func (h *PlatformHandler) SubmitSmartAIReview(c *gin.Context) {
 }
 
 func (h *PlatformHandler) ListSmartAITasks(c *gin.Context) {
-	data, err := h.platformService.ListSmartAITasks(middleware.CurrentAccessScope(c))
+	page, pageSize := readPageParams(c)
+	filter := service.SmartAITaskListFilter{
+		Status:     strings.TrimSpace(c.Query("status")),
+		AIFlowCode: strings.TrimSpace(c.Query("ai_flow_code")),
+	}
+	if raw := strings.TrimSpace(c.Query("recent_days")); raw != "" {
+		recentDays, err := strconv.Atoi(raw)
+		if err != nil || recentDays < 0 {
+			response.Error(c, http.StatusBadRequest, "invalid recent_days")
+			return
+		}
+		filter.RecentDays = recentDays
+	}
+	data, err := h.platformService.ListSmartAITasks(page, pageSize, filter, middleware.CurrentAccessScope(c))
 	if err != nil {
 		handlePlatformError(c, err)
 		return

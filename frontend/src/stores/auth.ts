@@ -48,6 +48,7 @@ export const useAuthStore = defineStore('auth', {
       permissionStore.setPermissionData({
         menus: meData.menus,
         buttonPermissions: meData.buttonPermissions,
+        roleCodes: meData.roles.map((role) => role.roleCode),
         dataScopes: meData.dataScopes,
       })
       this.initialized = true

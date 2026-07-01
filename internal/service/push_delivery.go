@@ -76,6 +76,26 @@ type emailAttachment struct {
 	Content     []byte
 }
 
+type deviceOfflineEmailContext struct {
+	ScheduleName string
+	CheckedAt    time.Time
+	CheckedTotal int
+	OfflineTotal int
+	ChangedTotal int
+	TriggeredBy  string
+	Items        []deviceOfflineEmailItem
+}
+
+type deviceOfflineEmailItem struct {
+	DeviceType string
+	DeviceID   uint
+	DeviceName string
+	IP         string
+	Location   string
+	OldStatus  string
+	NewStatus  string
+}
+
 func dispatchAlarmPushes(db *gorm.DB, cfg *config.Config, logger *zap.Logger, alarm entity.AlarmRecord, allowedChannels []string, triggeredBy string) {
 	if db == nil {
 		return
@@ -205,6 +225,70 @@ func deliverTestEmailPush(cfg *config.Config, config entity.PushConfig, now time
 		"</div>",
 	}, "")
 	return deliverEmailPush(cfg, config, subject, textBody, htmlBody, nil)
+}
+
+func deliverDeviceOfflineEmailPush(cfg *config.Config, config entity.PushConfig, ctx deviceOfflineEmailContext) pushDeliveryResult {
+	subject := fmt.Sprintf("[设备离线] %s 共 %d 台离线", fallbackText(ctx.ScheduleName), len(ctx.Items))
+	textBody := buildDeviceOfflineEmailTextBody(ctx)
+	htmlBody := buildDeviceOfflineEmailHTMLBody(ctx)
+	return deliverEmailPush(cfg, config, subject, textBody, htmlBody, nil)
+}
+
+func buildDeviceOfflineEmailTextBody(ctx deviceOfflineEmailContext) string {
+	lines := []string{
+		"设备离线巡检通知",
+		"巡检计划: " + fallbackText(ctx.ScheduleName),
+		"巡检时间: " + ctx.CheckedAt.Format("2006-01-02 15:04:05"),
+		fmt.Sprintf("检测总数: %d", ctx.CheckedTotal),
+		fmt.Sprintf("离线总数: %d", ctx.OfflineTotal),
+		fmt.Sprintf("状态变化: %d", ctx.ChangedTotal),
+		"",
+		"离线设备:",
+	}
+	for index, item := range ctx.Items {
+		lines = append(lines, fmt.Sprintf("%d. %s / %s / %s / %s",
+			index+1,
+			fallbackText(item.DeviceType),
+			fallbackText(item.DeviceName),
+			fallbackText(item.IP),
+			fallbackText(item.Location),
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildDeviceOfflineEmailHTMLBody(ctx deviceOfflineEmailContext) string {
+	rows := []string{
+		buildEmailTableRow("巡检计划", html.EscapeString(fallbackText(ctx.ScheduleName))),
+		buildEmailTableRow("巡检时间", html.EscapeString(ctx.CheckedAt.Format("2006-01-02 15:04:05"))),
+		buildEmailTableRow("检测总数", fmt.Sprintf("%d", ctx.CheckedTotal)),
+		buildEmailTableRow("离线总数", fmt.Sprintf("%d", ctx.OfflineTotal)),
+		buildEmailTableRow("状态变化", fmt.Sprintf("%d", ctx.ChangedTotal)),
+	}
+	deviceRows := make([]string, 0, len(ctx.Items))
+	for _, item := range ctx.Items {
+		deviceRows = append(deviceRows, fmt.Sprintf(
+			"<tr><td style=\"padding:6px 10px;border-bottom:1px solid #e5e7eb\">%s</td><td style=\"padding:6px 10px;border-bottom:1px solid #e5e7eb\">%s</td><td style=\"padding:6px 10px;border-bottom:1px solid #e5e7eb\">%s</td><td style=\"padding:6px 10px;border-bottom:1px solid #e5e7eb\">%s</td></tr>",
+			html.EscapeString(fallbackText(item.DeviceType)),
+			html.EscapeString(fallbackText(item.DeviceName)),
+			html.EscapeString(fallbackText(item.IP)),
+			html.EscapeString(fallbackText(item.Location)),
+		))
+	}
+	return strings.Join([]string{
+		"<div style=\"font-family:Arial,'Microsoft YaHei',sans-serif;color:#1f2d3d;line-height:1.75\">",
+		"<h3 style=\"margin:0 0 12px\">设备离线巡检通知</h3>",
+		"<table style=\"border-collapse:collapse;margin-bottom:14px\">",
+		strings.Join(rows, ""),
+		"</table>",
+		"<table style=\"border-collapse:collapse;width:100%;max-width:880px\">",
+		"<thead><tr><th style=\"text-align:left;padding:6px 10px;border-bottom:1px solid #d1d5db\">类型</th><th style=\"text-align:left;padding:6px 10px;border-bottom:1px solid #d1d5db\">名称</th><th style=\"text-align:left;padding:6px 10px;border-bottom:1px solid #d1d5db\">IP</th><th style=\"text-align:left;padding:6px 10px;border-bottom:1px solid #d1d5db\">位置</th></tr></thead>",
+		"<tbody>",
+		strings.Join(deviceRows, ""),
+		"</tbody>",
+		"</table>",
+		"</div>",
+	}, "")
 }
 
 func deliverDingtalkTextPush(config entity.PushConfig, content string) pushDeliveryResult {

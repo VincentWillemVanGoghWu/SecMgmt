@@ -5,7 +5,6 @@ import type {
   RecorderChannelUpdatePayload,
   RecorderConnectionTestData,
   RecorderRecord,
-  RecorderStatusCheckData,
   RecorderSubmitPayload,
 } from "../types/recorder"
 import { http } from "./http"
@@ -33,9 +32,6 @@ export const deleteRecorderApi = async (id: number): Promise<void> => {
 
 export const testRecorderConnectionApi = async (id: number): Promise<RecorderConnectionTestData> =>
   unwrap(await http.post<ApiResponse<RecorderConnectionTestData>>(`/recorders/${id}/test`))
-
-export const checkRecorderStatusApi = async (id: number): Promise<RecorderStatusCheckData> =>
-  unwrap(await http.post<ApiResponse<RecorderStatusCheckData>>(`/recorders/${id}/status/check`))
 
 export const syncRecorderChannelsApi = async (id: number): Promise<RecorderChannelSyncData> =>
   unwrap(await http.post<ApiResponse<RecorderChannelSyncData>>(`/recorders/${id}/sync-channels`))

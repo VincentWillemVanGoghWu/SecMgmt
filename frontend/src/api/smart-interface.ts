@@ -2,13 +2,18 @@ import type { ApiResponse } from "../types/auth"
 import type {
   SmartAiCallbackPayload,
   SmartAiReviewSubmitPayload,
+  SmartAiTaskPageRecord,
   SmartAiTaskRecord,
   SmartBindingDetailRecord,
+  SmartBindingPageRecord,
+  SmartBindingReconnectResult,
   SmartBindingRecord,
   SmartBindingRuleRecord,
   SmartBindingRuleSubmitPayload,
   SmartBindingSubmitPayload,
   SmartBindingTestResult,
+  SmartBridgeStatusRecord,
+  SmartBridgeReconnectLogPageRecord,
   SmartCapabilityRecord,
   SmartEventDetailRecord,
   SmartEventIngestResponse,
@@ -16,7 +21,7 @@ import type {
   SmartProviderRecord,
   SmartProviderSubmitPayload,
   SmartProviderTestResult,
-  SmartRawEventRecord,
+  SmartRawEventPageRecord,
 } from "../types/smart-interface"
 import { http } from "./http"
 
@@ -39,8 +44,8 @@ export const testSmartProviderApi = async (id: number): Promise<SmartProviderTes
 export const listSmartCapabilitiesApi = async (params?: Record<string, unknown>): Promise<SmartCapabilityRecord[]> =>
   unwrap(await http.get<ApiResponse<SmartCapabilityRecord[]>>("/smart/capabilities", { params }))
 
-export const listSmartBindingsApi = async (params?: Record<string, unknown>): Promise<SmartBindingRecord[]> =>
-  unwrap(await http.get<ApiResponse<SmartBindingRecord[]>>("/smart/bindings", { params }))
+export const listSmartBindingsApi = async (params?: Record<string, unknown>): Promise<SmartBindingPageRecord> =>
+  unwrap(await http.get<ApiResponse<SmartBindingPageRecord>>("/smart/bindings", { params }))
 
 export const createSmartBindingApi = async (payload: SmartBindingSubmitPayload): Promise<SmartBindingRecord> =>
   unwrap(await http.post<ApiResponse<SmartBindingRecord>>("/smart/bindings", payload))
@@ -59,6 +64,12 @@ export const getSmartBindingDetailApi = async (id: number): Promise<SmartBinding
 
 export const testSmartBindingApi = async (id: number): Promise<SmartBindingTestResult> =>
   unwrap(await http.post<ApiResponse<SmartBindingTestResult>>(`/smart/bindings/${id}/test`))
+
+export const reconnectSmartBindingApi = async (id: number): Promise<SmartBindingReconnectResult> =>
+  unwrap(await http.post<ApiResponse<SmartBindingReconnectResult>>(`/smart/bindings/${id}/reconnect`))
+
+export const getSmartBridgeStatusApi = async (): Promise<SmartBridgeStatusRecord> =>
+  unwrap(await http.get<ApiResponse<SmartBridgeStatusRecord>>("/smart/bridge/status"))
 
 export const createSmartBindingRuleApi = async (
   bindingId: number,
@@ -84,11 +95,14 @@ export const ingestSmartProviderEventApi = async (
 ): Promise<SmartEventIngestResponse> =>
   unwrap(await http.post<ApiResponse<SmartEventIngestResponse>>(`/smart/events/ingest/${providerCode}`, payload, { headers }))
 
-export const listSmartRawEventsApi = async (params?: Record<string, unknown>): Promise<SmartRawEventRecord[]> =>
-  unwrap(await http.get<ApiResponse<SmartRawEventRecord[]>>("/smart/raw-events", { params }))
+export const listSmartRawEventsApi = async (params?: Record<string, unknown>): Promise<SmartRawEventPageRecord> =>
+  unwrap(await http.get<ApiResponse<SmartRawEventPageRecord>>("/smart/raw-events", { params }))
 
 export const listSmartEventsApi = async (params?: Record<string, unknown>): Promise<SmartEventPageRecord> =>
   unwrap(await http.get<ApiResponse<SmartEventPageRecord>>("/smart/events", { params }))
+
+export const listSmartBridgeReconnectLogsApi = async (params?: Record<string, unknown>): Promise<SmartBridgeReconnectLogPageRecord> =>
+  unwrap(await http.get<ApiResponse<SmartBridgeReconnectLogPageRecord>>("/smart/bridge/reconnect-logs", { params }))
 
 export const getSmartEventDetailApi = async (id: number): Promise<SmartEventDetailRecord> =>
   unwrap(await http.get<ApiResponse<SmartEventDetailRecord>>(`/smart/events/${id}`))
@@ -99,8 +113,8 @@ export const submitSmartAiReviewApi = async (
 ): Promise<SmartAiTaskRecord> =>
   unwrap(await http.post<ApiResponse<SmartAiTaskRecord>>(`/smart/events/${eventId}/submit-ai-review`, payload))
 
-export const listSmartAiTasksApi = async (params?: Record<string, unknown>): Promise<SmartAiTaskRecord[]> =>
-  unwrap(await http.get<ApiResponse<SmartAiTaskRecord[]>>("/smart/ai-tasks", { params }))
+export const listSmartAiTasksApi = async (params?: Record<string, unknown>): Promise<SmartAiTaskPageRecord> =>
+  unwrap(await http.get<ApiResponse<SmartAiTaskPageRecord>>("/smart/ai-tasks", { params }))
 
 export const getSmartAiTaskApi = async (taskId: number): Promise<SmartAiTaskRecord> =>
   unwrap(await http.get<ApiResponse<SmartAiTaskRecord>>(`/smart/ai-tasks/${taskId}`))

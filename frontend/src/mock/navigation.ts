@@ -40,6 +40,7 @@ export const menuGroups: MenuItem[] = [
       { key: 'device-cameras', label: '摄像机管理', icon: 'VideoCamera', routeName: 'device-cameras' },
       { key: 'device-recorders', label: '录像机管理', icon: 'Monitor', routeName: 'device-recorders' },
       { key: 'device-channels', label: '通道管理', icon: 'Connection', routeName: 'device-channels' },
+      { key: 'device-check-schedules', label: '巡检计划', icon: 'Timer', routeName: 'device-check-schedules' },
     ],
   },
   {

@@ -183,27 +183,27 @@ type RecorderChannel struct {
 func (RecorderChannel) TableName() string { return "recorder_channel" }
 
 type AlarmRecord struct {
-	ID             uint       `gorm:"column:id;primaryKey"`
-	AlarmNo        string     `gorm:"column:alarm_no"`
-	AIEventID      *uint      `gorm:"column:ai_event_id"`
-	SmartEventID   *uint      `gorm:"column:smart_event_id"`
-	RawEventID     *uint      `gorm:"column:raw_event_id"`
-	AIReviewTaskID *uint      `gorm:"column:ai_review_task_id"`
-	AlarmType      string     `gorm:"column:alarm_type"`
-	AlarmLevel     string     `gorm:"column:alarm_level"`
-	AlarmTime      time.Time  `gorm:"column:alarm_time"`
-	Status         string     `gorm:"column:status"`
-	SourceStage    string     `gorm:"column:source_stage"`
-	ParentAlarmID  *uint      `gorm:"column:parent_alarm_id"`
-	AlarmOrigin    string     `gorm:"column:alarm_origin"`
-	CameraID       *uint      `gorm:"column:camera_id"`
-	RecorderID     *uint      `gorm:"column:recorder_id"`
-	ChannelID      *uint      `gorm:"column:channel_id"`
-	FactoryID      *uint      `gorm:"column:factory_id"`
-	ZoneID         *uint      `gorm:"column:zone_id"`
-	Message        string     `gorm:"column:message"`
-	ImageURL       string     `gorm:"column:image_url"`
-	VideoURL       string     `gorm:"column:video_url"`
+	ID              uint       `gorm:"column:id;primaryKey"`
+	AlarmNo         string     `gorm:"column:alarm_no"`
+	AIEventID       *uint      `gorm:"column:ai_event_id"`
+	SmartEventID    *uint      `gorm:"column:smart_event_id"`
+	RawEventID      *uint      `gorm:"column:raw_event_id"`
+	AIReviewTaskID  *uint      `gorm:"column:ai_review_task_id"`
+	AlarmType       string     `gorm:"column:alarm_type"`
+	AlarmLevel      string     `gorm:"column:alarm_level"`
+	AlarmTime       time.Time  `gorm:"column:alarm_time"`
+	Status          string     `gorm:"column:status"`
+	SourceStage     string     `gorm:"column:source_stage"`
+	ParentAlarmID   *uint      `gorm:"column:parent_alarm_id"`
+	AlarmOrigin     string     `gorm:"column:alarm_origin"`
+	CameraID        *uint      `gorm:"column:camera_id"`
+	RecorderID      *uint      `gorm:"column:recorder_id"`
+	ChannelID       *uint      `gorm:"column:channel_id"`
+	FactoryID       *uint      `gorm:"column:factory_id"`
+	ZoneID          *uint      `gorm:"column:zone_id"`
+	Message         string     `gorm:"column:message"`
+	ImageURL        string     `gorm:"column:image_url"`
+	VideoURL        string     `gorm:"column:video_url"`
 	RecordStartTime *time.Time `gorm:"column:record_start_time"`
 	RecordEndTime   *time.Time `gorm:"column:record_end_time"`
 	PushRecordsJSON string     `gorm:"column:push_records_json"`
@@ -242,6 +242,59 @@ type DeviceStatusLog struct {
 }
 
 func (DeviceStatusLog) TableName() string { return "device_status_log" }
+
+type DeviceCheckSchedule struct {
+	ID                uint       `gorm:"column:id;primaryKey"`
+	Name              string     `gorm:"column:name;type:varchar(100);not null"`
+	Enabled           bool       `gorm:"column:enabled;not null"`
+	FrequencyPerDay   int        `gorm:"column:frequency_per_day;not null"`
+	NotifyEnabled     bool       `gorm:"column:notify_enabled;not null"`
+	PushConfigIDsJSON string     `gorm:"column:push_config_ids_json;type:text"`
+	NotifyMode        string     `gorm:"column:notify_mode;type:varchar(30);not null"`
+	LastRunAt         *time.Time `gorm:"column:last_run_at"`
+	NextRunAt         *time.Time `gorm:"column:next_run_at"`
+	LastSuccessAt     *time.Time `gorm:"column:last_success_at"`
+	LastError         string     `gorm:"column:last_error;type:text"`
+	CreatedAt         time.Time  `gorm:"column:created_at"`
+	UpdatedAt         time.Time  `gorm:"column:updated_at"`
+}
+
+func (DeviceCheckSchedule) TableName() string { return "device_check_schedule" }
+
+type DeviceCheckRun struct {
+	ID            uint       `gorm:"column:id;primaryKey"`
+	ScheduleID    *uint      `gorm:"column:schedule_id"`
+	StartedAt     time.Time  `gorm:"column:started_at;not null"`
+	FinishedAt    *time.Time `gorm:"column:finished_at"`
+	Status        string     `gorm:"column:status;type:varchar(20);not null"`
+	CheckedTotal  int        `gorm:"column:checked_total;not null"`
+	OnlineTotal   int        `gorm:"column:online_total;not null"`
+	OfflineTotal  int        `gorm:"column:offline_total;not null"`
+	DisabledTotal int        `gorm:"column:disabled_total;not null"`
+	ChangedTotal  int        `gorm:"column:changed_total;not null"`
+	Notified      bool       `gorm:"column:notified;not null"`
+	ErrorMessage  string     `gorm:"column:error_message;type:text"`
+	CreatedAt     time.Time  `gorm:"column:created_at"`
+}
+
+func (DeviceCheckRun) TableName() string { return "device_check_run" }
+
+type DeviceCheckPushLog struct {
+	ID           uint      `gorm:"column:id;primaryKey"`
+	ScheduleID   *uint     `gorm:"column:schedule_id"`
+	RunID        *uint     `gorm:"column:run_id"`
+	PushConfigID *uint     `gorm:"column:push_config_id"`
+	Status       string    `gorm:"column:status;type:varchar(30);not null"`
+	ConfigName   string    `gorm:"column:config_name;type:varchar(100)"`
+	OfflineCount int       `gorm:"column:offline_count;not null"`
+	Message      string    `gorm:"column:message;type:varchar(255)"`
+	RequestBody  string    `gorm:"column:request_body;type:text"`
+	ResponseBody string    `gorm:"column:response_body;type:text"`
+	ErrorMessage string    `gorm:"column:error_message;type:text"`
+	PushedAt     time.Time `gorm:"column:pushed_at;not null"`
+}
+
+func (DeviceCheckPushLog) TableName() string { return "device_check_push_log" }
 
 type OperationLog struct {
 	ID               uint      `gorm:"column:id;primaryKey"`
@@ -371,17 +424,17 @@ type SmartInterfaceProvider struct {
 func (SmartInterfaceProvider) TableName() string { return "smart_interface_provider" }
 
 type SmartInterfaceCapability struct {
-	ID               uint      `gorm:"column:id;primaryKey"`
-	CapabilityCode   string    `gorm:"column:capability_code"`
-	CapabilityName   string    `gorm:"column:capability_name"`
-	EventCategory    string    `gorm:"column:event_category"`
-	SupportsPush     bool      `gorm:"column:supports_push"`
-	SupportsPull     bool      `gorm:"column:supports_pull"`
-	SupportsAIReview bool      `gorm:"column:supports_ai_review"`
-	PayloadSchemaJSON string   `gorm:"column:payload_schema_json"`
-	DefaultRuleJSON  string    `gorm:"column:default_rule_json"`
-	Enabled          bool      `gorm:"column:enabled"`
-	CreatedAt        time.Time `gorm:"column:created_at"`
+	ID                uint      `gorm:"column:id;primaryKey"`
+	CapabilityCode    string    `gorm:"column:capability_code"`
+	CapabilityName    string    `gorm:"column:capability_name"`
+	EventCategory     string    `gorm:"column:event_category"`
+	SupportsPush      bool      `gorm:"column:supports_push"`
+	SupportsPull      bool      `gorm:"column:supports_pull"`
+	SupportsAIReview  bool      `gorm:"column:supports_ai_review"`
+	PayloadSchemaJSON string    `gorm:"column:payload_schema_json"`
+	DefaultRuleJSON   string    `gorm:"column:default_rule_json"`
+	Enabled           bool      `gorm:"column:enabled"`
+	CreatedAt         time.Time `gorm:"column:created_at"`
 }
 
 func (SmartInterfaceCapability) TableName() string { return "smart_interface_capability" }
@@ -428,50 +481,71 @@ type SmartBindingRule struct {
 
 func (SmartBindingRule) TableName() string { return "smart_binding_rule" }
 
-type SmartRawEvent struct {
+type SmartBridgeReconnectLog struct {
 	ID             uint       `gorm:"column:id;primaryKey"`
-	ProviderID     uint       `gorm:"column:provider_id"`
-	CapabilityID   *uint      `gorm:"column:capability_id"`
-	BindingID      *uint      `gorm:"column:binding_id"`
-	SourceType     string     `gorm:"column:source_type"`
-	SourceID       *uint      `gorm:"column:source_id"`
-	SourceEventID  string     `gorm:"column:source_event_id"`
-	EventNo        string     `gorm:"column:event_no"`
-	EventTime      time.Time  `gorm:"column:event_time"`
-	SignatureValid *bool      `gorm:"column:signature_valid"`
-	HeadersJSON    string     `gorm:"column:headers_json"`
-	RawPayloadJSON string     `gorm:"column:raw_payload_json"`
-	ParseStatus    string     `gorm:"column:parse_status"`
-	ParseError     string     `gorm:"column:parse_error"`
+	TaskKey        string     `gorm:"column:task_key"`
+	CycleKey       string     `gorm:"column:cycle_key"`
+	TriggerReason  string     `gorm:"column:trigger_reason"`
+	Action         string     `gorm:"column:action"`
+	Status         string     `gorm:"column:status"`
+	DeviceType     string     `gorm:"column:device_type"`
+	DeviceID       uint       `gorm:"column:device_id"`
+	SessionKey     string     `gorm:"column:session_key"`
+	BindingIDsJSON string     `gorm:"column:binding_ids_json"`
+	Attempt        int        `gorm:"column:attempt"`
+	MaxAttempts    int        `gorm:"column:max_attempts"`
+	NextRunAt      *time.Time `gorm:"column:next_run_at"`
+	Detail         string     `gorm:"column:detail"`
+	LastError      string     `gorm:"column:last_error"`
 	CreatedAt      time.Time  `gorm:"column:created_at"`
+}
+
+func (SmartBridgeReconnectLog) TableName() string { return "smart_bridge_reconnect_log" }
+
+type SmartRawEvent struct {
+	ID             uint      `gorm:"column:id;primaryKey"`
+	ProviderID     uint      `gorm:"column:provider_id"`
+	CapabilityID   *uint     `gorm:"column:capability_id"`
+	BindingID      *uint     `gorm:"column:binding_id"`
+	SourceType     string    `gorm:"column:source_type"`
+	SourceID       *uint     `gorm:"column:source_id"`
+	SourceEventID  string    `gorm:"column:source_event_id"`
+	EventNo        string    `gorm:"column:event_no"`
+	EventTime      time.Time `gorm:"column:event_time"`
+	SignatureValid *bool     `gorm:"column:signature_valid"`
+	HeadersJSON    string    `gorm:"column:headers_json"`
+	RawPayloadJSON string    `gorm:"column:raw_payload_json"`
+	ParseStatus    string    `gorm:"column:parse_status"`
+	ParseError     string    `gorm:"column:parse_error"`
+	CreatedAt      time.Time `gorm:"column:created_at"`
 }
 
 func (SmartRawEvent) TableName() string { return "smart_raw_event" }
 
 type SmartEvent struct {
-	ID                    uint       `gorm:"column:id;primaryKey"`
-	RawEventID            *uint      `gorm:"column:raw_event_id"`
-	BindingID             *uint      `gorm:"column:binding_id"`
-	ProviderID            uint       `gorm:"column:provider_id"`
-	CapabilityID          *uint      `gorm:"column:capability_id"`
-	EventCode             string     `gorm:"column:event_code"`
-	EventType             string     `gorm:"column:event_type"`
-	EventLevel            string     `gorm:"column:event_level"`
-	SourceStage           string     `gorm:"column:source_stage"`
-	EventTime             time.Time  `gorm:"column:event_time"`
-	CameraID              *uint      `gorm:"column:camera_id"`
-	RecorderID            *uint      `gorm:"column:recorder_id"`
-	ChannelID             *uint      `gorm:"column:channel_id"`
-	FactoryID             *uint      `gorm:"column:factory_id"`
-	ZoneID                *uint      `gorm:"column:zone_id"`
-	ImageURL              string     `gorm:"column:image_url"`
-	VideoURL              string     `gorm:"column:video_url"`
-	Confidence            *float64   `gorm:"column:confidence"`
-	DedupKey              string     `gorm:"column:dedup_key"`
-	NormalizedPayloadJSON string     `gorm:"column:normalized_payload_json"`
-	Status                string     `gorm:"column:status"`
-	CreatedAt             time.Time  `gorm:"column:created_at"`
-	UpdatedAt             time.Time  `gorm:"column:updated_at"`
+	ID                    uint      `gorm:"column:id;primaryKey"`
+	RawEventID            *uint     `gorm:"column:raw_event_id"`
+	BindingID             *uint     `gorm:"column:binding_id"`
+	ProviderID            uint      `gorm:"column:provider_id"`
+	CapabilityID          *uint     `gorm:"column:capability_id"`
+	EventCode             string    `gorm:"column:event_code"`
+	EventType             string    `gorm:"column:event_type"`
+	EventLevel            string    `gorm:"column:event_level"`
+	SourceStage           string    `gorm:"column:source_stage"`
+	EventTime             time.Time `gorm:"column:event_time"`
+	CameraID              *uint     `gorm:"column:camera_id"`
+	RecorderID            *uint     `gorm:"column:recorder_id"`
+	ChannelID             *uint     `gorm:"column:channel_id"`
+	FactoryID             *uint     `gorm:"column:factory_id"`
+	ZoneID                *uint     `gorm:"column:zone_id"`
+	ImageURL              string    `gorm:"column:image_url"`
+	VideoURL              string    `gorm:"column:video_url"`
+	Confidence            *float64  `gorm:"column:confidence"`
+	DedupKey              string    `gorm:"column:dedup_key"`
+	NormalizedPayloadJSON string    `gorm:"column:normalized_payload_json"`
+	Status                string    `gorm:"column:status"`
+	CreatedAt             time.Time `gorm:"column:created_at"`
+	UpdatedAt             time.Time `gorm:"column:updated_at"`
 }
 
 func (SmartEvent) TableName() string { return "smart_event" }

@@ -17,7 +17,6 @@ import SearchForm from "../../components/common/SearchForm.vue"
 import StatusTag from "../../components/common/StatusTag.vue"
 import { listFactoriesApi } from "../../api/master-data"
 import {
-  checkRecorderStatusApi,
   createRecorderApi,
   deleteRecorderApi,
   getRecorderApi,
@@ -41,7 +40,6 @@ const submitting = ref(false)
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
 const testingId = ref<number | null>(null)
-const checkingId = ref<number | null>(null)
 const syncingId = ref<number | null>(null)
 const checkingAll = ref(false)
 const formRef = ref<FormInstance>()
@@ -276,19 +274,6 @@ const handleSyncChannels = async (record: RecorderRecord) => {
   }
 }
 
-const handleCheckStatus = async (record: RecorderRecord) => {
-  checkingId.value = record.id
-  try {
-    const result = await checkRecorderStatusApi(record.id)
-    ElMessage.success(result.message)
-    await loadRecords()
-  } catch (error) {
-    ElMessage.error(resolveErrorMessage(error, "录像机状态检测失败"))
-  } finally {
-    checkingId.value = null
-  }
-}
-
 const handleCheckAll = async () => {
   checkingAll.value = true
   try {
@@ -462,15 +447,6 @@ onMounted(async () => {
                 >
                   <el-icon><Connection /></el-icon>
                   <span>{{ testingId === record.id ? "测试中" : "测试" }}</span>
-                </button>
-                <button
-                  v-permission="'device:recorder:test'"
-                  class="app-button app-button--secondary device-page__button device-page__table-button unified-list-page__button unified-list-page__table-button"
-                  :disabled="checkingId === record.id"
-                  @click="handleCheckStatus(record)"
-                >
-                  <el-icon><RefreshRight /></el-icon>
-                  <span>{{ checkingId === record.id ? "检测中" : "检测" }}</span>
                 </button>
                 <button
                   v-permission="'device:recorder:sync'"

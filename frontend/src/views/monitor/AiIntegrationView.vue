@@ -16,12 +16,15 @@ import {
   createSmartProviderApi,
   deleteSmartBindingApi,
   deleteSmartBindingRuleApi,
+  getSmartBridgeStatusApi,
   getSmartBindingDetailApi,
   getSmartEventDetailApi,
+  listSmartBridgeReconnectLogsApi,
   listSmartBindingsApi,
   listSmartCapabilitiesApi,
   listSmartEventsApi,
   listSmartProvidersApi,
+  reconnectSmartBindingApi,
   retrySmartAiTaskApi,
   testSmartBindingApi,
   testSmartProviderApi,
@@ -36,9 +39,13 @@ import type { PushConfigRecord } from '../../types/push'
 import type {
   SmartAiTaskRecord,
   SmartBindingDetailRecord,
+  SmartBindingPageRecord,
   SmartBindingRecord,
   SmartBindingRuleRecord,
   SmartBindingTestResult,
+  SmartBridgeStatusRecord,
+  SmartBridgeReconnectLogPageRecord,
+  SmartBridgeReconnectLogRecord,
   SmartCapabilityRecord,
   SmartEventDetailRecord,
   SmartEventPageRecord,
@@ -54,21 +61,35 @@ const bindingSubmitting = ref(false)
 const ruleSubmitting = ref(false)
 const providerTestingId = ref<number | null>(null)
 const bindingTestingId = ref<number | null>(null)
+const bindingReconnectingId = ref<number | null>(null)
 const retryingTaskId = ref<number | null>(null)
 
-const activeTab = ref<'providers' | 'bindings' | 'events'>('providers')
+const activeTab = ref<'providers' | 'bindings' | 'events' | 'reconnectLogs'>('providers')
 
 const providers = ref<SmartProviderRecord[]>([])
+const bridgeStatus = ref<SmartBridgeStatusRecord | null>(null)
 const capabilities = ref<SmartCapabilityRecord[]>([])
 const bindings = ref<SmartBindingRecord[]>([])
 const events = ref<SmartEventRecord[]>([])
+const reconnectLogs = ref<SmartBridgeReconnectLogRecord[]>([])
+const bindingPage = reactive({
+  page: 1,
+  pageSize: 20,
+  total: 0,
+})
 const eventPage = reactive({
+  page: 1,
+  pageSize: 50,
+  total: 0,
+})
+const reconnectLogPage = reactive({
   page: 1,
   pageSize: 50,
   total: 0,
 })
 const formOptionsLoaded = ref(false)
 const eventsLoaded = ref(false)
+const reconnectLogsLoaded = ref(false)
 const eventUseRecentDefault = ref(true)
 const factories = ref<FactoryRecord[]>([])
 const zones = ref<ZoneRecord[]>([])
@@ -104,6 +125,15 @@ const eventQuery = reactive({
   capabilityCode: '',
   status: '',
   sourceStage: '',
+})
+
+const reconnectLogQuery = reactive({
+  sessionKey: '',
+  deviceType: '',
+  triggerReason: '',
+  action: '',
+  status: '',
+  range: [] as string[],
 })
 
 const providerForm = reactive({
@@ -193,6 +223,39 @@ const sourceStageOptions = [
   { label: 'AI复核', value: 'ai_reviewed' },
 ]
 
+const reconnectReasonOptions = [
+  { label: '全部', value: '' },
+  { label: '离线后上线', value: 'offline_to_online' },
+  { label: '持续离线巡检', value: 'offline_still' },
+  { label: '上线转离线', value: 'online_to_offline' },
+  { label: '手动重连', value: 'manual_binding_reconnect' },
+]
+
+const reconnectActionOptions = [
+  { label: '全部', value: '' },
+  { label: '已入队', value: 'queued' },
+  { label: '已连接', value: 'already_connected' },
+  { label: '重试已排程', value: 'retry_scheduled' },
+  { label: '重连成功', value: 'success' },
+  { label: '重连失败', value: 'failed' },
+  { label: '关闭会话', value: 'closed' },
+  { label: '无绑定', value: 'no_target' },
+  { label: '解析失败', value: 'resolve_failed' },
+  { label: '任务执行中', value: 'skip_active' },
+  { label: '同轮跳过', value: 'skip_same_cycle' },
+]
+
+const reconnectStatusOptions = [
+  { label: '全部', value: '' },
+  { label: '等待中', value: 'pending' },
+  { label: '执行中', value: 'running' },
+  { label: '成功', value: 'success' },
+  { label: '失败', value: 'failed' },
+  { label: '已关闭', value: 'closed' },
+  { label: '无绑定', value: 'no_target' },
+  { label: '解析失败', value: 'resolve_failed' },
+]
+
 const levelToneMap: Record<string, StatusTone> = {
   critical: 'danger',
   high: 'danger',
@@ -213,6 +276,36 @@ const eventStatusMetaMap: Record<string, { text: string; tone: StatusTone }> = {
 const sourceStageTextMap: Record<string, string> = {
   raw: '原始事件',
   ai_reviewed: 'AI复核',
+}
+
+const reconnectReasonTextMap: Record<string, string> = {
+  offline_to_online: '离线后上线',
+  offline_still: '持续离线巡检',
+  online_to_offline: '上线转离线',
+  manual_binding_reconnect: '手动重连',
+}
+
+const reconnectActionTextMap: Record<string, string> = {
+  queued: '已入队',
+  already_connected: '已连接',
+  retry_scheduled: '重试已排程',
+  success: '重连成功',
+  failed: '重连失败',
+  closed: '关闭会话',
+  no_target: '无绑定',
+  resolve_failed: '解析失败',
+  skip_active: '任务执行中',
+  skip_same_cycle: '同轮跳过',
+}
+
+const reconnectStatusMetaMap: Record<string, { text: string; tone: StatusTone }> = {
+  pending: { text: '等待中', tone: 'warning' },
+  running: { text: '执行中', tone: 'warning' },
+  success: { text: '成功', tone: 'success' },
+  failed: { text: '失败', tone: 'danger' },
+  closed: { text: '已关闭', tone: 'default' },
+  no_target: { text: '无绑定', tone: 'info' },
+  resolve_failed: { text: '解析失败', tone: 'danger' },
 }
 
 const aiTaskStatusMetaMap: Record<string, { text: string; tone: StatusTone }> = {
@@ -236,8 +329,8 @@ const parseStatusMetaMap: Record<string, { text: string; tone: StatusTone }> = {
 const metrics = computed(() => [
   { label: '接口提供方', value: providers.value.length },
   { label: '绑定项', value: bindings.value.length },
-  { label: '启用绑定', value: bindings.value.filter((item) => item.enabled).length },
-  { label: '事件流水', value: eventPage.total },
+  { label: 'Bridge会话', value: bridgeStatus.value?.bridge.sessionCount ?? 0 },
+  { label: '重连任务', value: bridgeStatus.value?.reconnect.taskCount ?? 0 },
 ])
 
 const sourceOptions = computed(() => {
@@ -319,12 +412,20 @@ const getEventLevelTone = (value: string) => levelToneMap[value] ?? 'info'
 const getEventStatusTone = (value: string) => eventStatusMetaMap[value]?.tone ?? 'info'
 const getEventStatusText = (value: string) => eventStatusMetaMap[value]?.text ?? value
 const getSourceStageText = (value: string) => sourceStageTextMap[value] ?? value
+const getReconnectReasonText = (value: string) => reconnectReasonTextMap[value] ?? value
+const getReconnectActionText = (value: string) => reconnectActionTextMap[value] ?? value
+const getReconnectStatusTone = (value: string) => reconnectStatusMetaMap[value]?.tone ?? 'info'
+const getReconnectStatusText = (value: string) => reconnectStatusMetaMap[value]?.text ?? value
 const getAiTaskStatusTone = (value: string) => aiTaskStatusMetaMap[value]?.tone ?? 'info'
 const getAiTaskStatusText = (value: string) => aiTaskStatusMetaMap[value]?.text ?? value
 const getAiDecisionTone = (value: string) => aiDecisionMetaMap[value]?.tone ?? 'info'
 const getAiDecisionText = (value: string) => aiDecisionMetaMap[value]?.text ?? value
 const getParseStatusTone = (value: string) => parseStatusMetaMap[value]?.tone ?? 'info'
 const getParseStatusText = (value: string) => parseStatusMetaMap[value]?.text ?? value
+const formatAttemptText = (item: SmartBridgeReconnectLogRecord) => {
+  if (!item.maxAttempts) return String(item.attempt || 0)
+  return `${item.attempt || 0}/${item.maxAttempts}`
+}
 
 const getDefaultBindingSourceId = (sourceType: string) => {
   if (sourceType === 'camera') return cameras.value[0] ? String(cameras.value[0].id) : ''
@@ -370,13 +471,23 @@ const loadProviders = async () => {
   providers.value = await listSmartProvidersApi()
 }
 
+const loadBridgeStatus = async () => {
+  bridgeStatus.value = await getSmartBridgeStatusApi()
+}
+
 const loadBindings = async () => {
-  bindings.value = await listSmartBindingsApi({
+  const result: SmartBindingPageRecord = await listSmartBindingsApi({
     source_type: bindingQuery.sourceType || undefined,
     provider_code: bindingQuery.providerCode || undefined,
     capability_code: bindingQuery.capabilityCode || undefined,
     enabled: bindingQuery.enabled ? bindingQuery.enabled === 'true' : undefined,
+    page: bindingPage.page,
+    page_size: bindingPage.pageSize,
   })
+  bindings.value = result.items
+  bindingPage.total = result.total
+  bindingPage.page = result.page
+  bindingPage.pageSize = result.pageSize
 }
 
 const loadEvents = async () => {
@@ -396,6 +507,25 @@ const loadEvents = async () => {
   eventPage.pageSize = result.pageSize
 }
 
+const loadReconnectLogs = async () => {
+  const [startAt, endAt] = reconnectLogQuery.range
+  const result: SmartBridgeReconnectLogPageRecord = await listSmartBridgeReconnectLogsApi({
+    session_key: reconnectLogQuery.sessionKey || undefined,
+    device_type: reconnectLogQuery.deviceType || undefined,
+    trigger_reason: reconnectLogQuery.triggerReason || undefined,
+    action: reconnectLogQuery.action || undefined,
+    status: reconnectLogQuery.status || undefined,
+    start_at: startAt || undefined,
+    end_at: endAt || undefined,
+    page: reconnectLogPage.page,
+    page_size: reconnectLogPage.pageSize,
+  })
+  reconnectLogs.value = result.items
+  reconnectLogPage.total = result.total
+  reconnectLogPage.page = result.page
+  reconnectLogPage.pageSize = result.pageSize
+}
+
 const loadEventsWithFeedback = async () => {
   loading.value = true
   try {
@@ -408,15 +538,32 @@ const loadEventsWithFeedback = async () => {
   }
 }
 
+const loadReconnectLogsWithFeedback = async () => {
+  loading.value = true
+  try {
+    await loadReconnectLogs()
+    reconnectLogsLoaded.value = true
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '加载重连日志失败'))
+  } finally {
+    loading.value = false
+  }
+}
+
 const refreshEventsIfLoaded = async () => {
   if (!eventsLoaded.value) return
   await loadEvents()
 }
 
+const refreshReconnectLogsIfLoaded = async () => {
+  if (!reconnectLogsLoaded.value) return
+  await loadReconnectLogs()
+}
+
 const loadAll = async () => {
   loading.value = true
   try {
-    await Promise.all([loadCapabilities(), loadProviders(), loadBindings()])
+    await Promise.all([loadCapabilities(), loadProviders(), loadBindings(), loadBridgeStatus()])
   } catch (error) {
     ElMessage.error(resolveErrorMessage(error, '加载智能接口数据失败'))
   } finally {
@@ -430,9 +577,29 @@ const handleEventSearch = async () => {
   await loadEventsWithFeedback()
 }
 
+const handleReconnectLogSearch = async () => {
+  reconnectLogPage.page = 1
+  await loadReconnectLogsWithFeedback()
+}
+
+const handleBindingSearch = async () => {
+  bindingPage.page = 1
+  await loadBindings()
+}
+
+const handleBindingPageChange = async (page: number) => {
+  bindingPage.page = page
+  await loadBindings()
+}
+
 const handleEventPageChange = async (page: number) => {
   eventPage.page = page
   await loadEventsWithFeedback()
+}
+
+const handleReconnectLogPageChange = async (page: number) => {
+  reconnectLogPage.page = page
+  await loadReconnectLogsWithFeedback()
 }
 
 const resetProviderForm = () => {
@@ -649,6 +816,19 @@ const handleTestBinding = async (record: SmartBindingRecord) => {
   }
 }
 
+const handleReconnectBinding = async (record: SmartBindingRecord) => {
+  bindingReconnectingId.value = record.id
+  try {
+    const result = await reconnectSmartBindingApi(record.id)
+    ElMessage.success(result.message || '智能接口重连任务已提交')
+    await Promise.all([loadBridgeStatus(), refreshReconnectLogsIfLoaded()])
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '提交智能接口重连失败'))
+  } finally {
+    bindingReconnectingId.value = null
+  }
+}
+
 const openCreateBindingDialog = async () => {
   await ensureFormOptionsLoaded()
   resetBindingForm()
@@ -856,6 +1036,9 @@ watch(
     if (value === 'events' && !eventsLoaded.value) {
       await loadEventsWithFeedback()
     }
+    if (value === 'reconnectLogs' && !reconnectLogsLoaded.value) {
+      await loadReconnectLogsWithFeedback()
+    }
   },
 )
 
@@ -939,34 +1122,34 @@ onMounted(async () => {
         <el-tab-pane label="接口绑定" name="bindings">
           <SearchForm class="smart-interface-page__search-form smart-interface-page__search-form--bindings unified-list-page__search-form">
             <div class="app-field">
-              <select v-model="bindingQuery.sourceType" v-refresh-on-empty="loadBindings">
+              <select v-model="bindingQuery.sourceType" v-refresh-on-empty="handleBindingSearch">
                 <option value="" hidden>绑定对象</option>
                 <option value="">全部</option>
                 <option v-for="item in sourceTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="bindingQuery.providerCode" v-refresh-on-empty="loadBindings">
+              <select v-model="bindingQuery.providerCode" v-refresh-on-empty="handleBindingSearch">
                 <option value="" hidden>接口提供方</option>
                 <option value="">全部</option>
                 <option v-for="item in providers" :key="item.id" :value="item.providerCode">{{ item.providerName }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="bindingQuery.capabilityCode" v-refresh-on-empty="loadBindings">
+              <select v-model="bindingQuery.capabilityCode" v-refresh-on-empty="handleBindingSearch">
                 <option value="" hidden>能力类型</option>
                 <option value="">全部</option>
                 <option v-for="item in capabilities" :key="item.id" :value="item.capabilityCode">{{ item.capabilityName }}</option>
               </select>
             </div>
             <div class="app-field">
-              <select v-model="bindingQuery.enabled" v-refresh-on-empty="loadBindings">
+              <select v-model="bindingQuery.enabled" v-refresh-on-empty="handleBindingSearch">
                 <option value="" hidden>启用状态</option>
                 <option v-for="item in enabledOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
               </select>
             </div>
             <template #actions>
-              <button class="app-button app-button--primary smart-interface-page__button unified-list-page__button unified-list-page__search-button" @click="loadBindings">
+              <button class="app-button app-button--primary smart-interface-page__button unified-list-page__button unified-list-page__search-button" @click="handleBindingSearch">
                 <el-icon><Search /></el-icon>
                 <span>查询</span>
               </button>
@@ -1035,6 +1218,13 @@ onMounted(async () => {
                     >
                       {{ bindingTestingId === item.id ? '自检中...' : '自检' }}
                     </button>
+                    <button
+                      class="app-button app-button--warning smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button"
+                      :disabled="bindingReconnectingId === item.id"
+                      @click="handleReconnectBinding(item)"
+                    >
+                      {{ bindingReconnectingId === item.id ? '提交中...' : '重连' }}
+                    </button>
                     <button class="app-button app-button--secondary smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button" @click="openEditBindingDialog(item)">编辑</button>
                     <button class="app-button app-button--danger smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button" @click="handleDeleteBinding(item)">
                       删除
@@ -1044,6 +1234,16 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          <div class="smart-interface-page__pagination">
+            <el-pagination
+              background
+              layout="total, prev, pager, next"
+              :current-page="bindingPage.page"
+              :page-size="bindingPage.pageSize"
+              :total="bindingPage.total"
+              @current-change="handleBindingPageChange"
+            />
+          </div>
         </el-tab-pane>
 
         <el-tab-pane label="事件流水" name="events">
@@ -1149,6 +1349,113 @@ onMounted(async () => {
               :page-size="eventPage.pageSize"
               :total="eventPage.total"
               @current-change="handleEventPageChange"
+            />
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="重连日志" name="reconnectLogs">
+          <SearchForm class="smart-interface-page__search-form smart-interface-page__search-form--reconnect unified-list-page__search-form">
+            <div class="app-field">
+              <ClearableSearchInput v-model="reconnectLogQuery.sessionKey" placeholder="Session Key" @clear="handleReconnectLogSearch" />
+            </div>
+            <div class="app-field">
+              <select v-model="reconnectLogQuery.deviceType" v-refresh-on-empty="handleReconnectLogSearch">
+                <option value="" hidden>设备类型</option>
+                <option value="">全部</option>
+                <option v-for="item in sourceTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+            </div>
+            <div class="app-field">
+              <select v-model="reconnectLogQuery.triggerReason" v-refresh-on-empty="handleReconnectLogSearch">
+                <option value="" hidden>触发原因</option>
+                <option v-for="item in reconnectReasonOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+            </div>
+            <div class="app-field">
+              <select v-model="reconnectLogQuery.action" v-refresh-on-empty="handleReconnectLogSearch">
+                <option value="" hidden>动作</option>
+                <option v-for="item in reconnectActionOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+            </div>
+            <div class="app-field">
+              <select v-model="reconnectLogQuery.status" v-refresh-on-empty="handleReconnectLogSearch">
+                <option value="" hidden>状态</option>
+                <option v-for="item in reconnectStatusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+            </div>
+            <div class="app-field">
+              <el-date-picker
+                v-model="reconnectLogQuery.range"
+                type="datetimerange"
+                value-format="YYYY-MM-DDTHH:mm:ss"
+                start-placeholder="开始时间"
+                end-placeholder="结束时间"
+                range-separator="至"
+                clearable
+                @change="handleReconnectLogSearch"
+              />
+            </div>
+            <template #actions>
+              <button class="app-button app-button--primary smart-interface-page__button unified-list-page__button unified-list-page__search-button" @click="handleReconnectLogSearch">
+                <el-icon><Search /></el-icon>
+                <span>查询</span>
+              </button>
+            </template>
+          </SearchForm>
+
+          <table class="app-table smart-interface-page__table smart-interface-page__event-table smart-interface-page__reconnect-table unified-list-page__table">
+            <colgroup>
+              <col class="smart-interface-page__reconnect-col-time" />
+              <col class="smart-interface-page__reconnect-col-device" />
+              <col class="smart-interface-page__reconnect-col-session" />
+              <col class="smart-interface-page__reconnect-col-reason" />
+              <col class="smart-interface-page__reconnect-col-action" />
+              <col class="smart-interface-page__reconnect-col-status" />
+              <col class="smart-interface-page__reconnect-col-attempt" />
+              <col class="smart-interface-page__reconnect-col-next" />
+              <col class="smart-interface-page__reconnect-col-detail" />
+              <col class="smart-interface-page__reconnect-col-error" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>设备</th>
+                <th>Session</th>
+                <th>触发原因</th>
+                <th>动作</th>
+                <th>状态</th>
+                <th>尝试</th>
+                <th>下次执行</th>
+                <th>说明</th>
+                <th>错误</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!reconnectLogs.length">
+                <td colspan="10" class="app-table__empty">{{ loading ? '加载中...' : '暂无重连日志' }}</td>
+              </tr>
+              <tr v-for="item in reconnectLogs" :key="item.id">
+                <td>{{ formatDateTime(item.createdAt) }}</td>
+                <td>{{ getSourceTypeText(item.deviceType) }} #{{ item.deviceId }}</td>
+                <td>{{ item.sessionKey || '-' }}</td>
+                <td>{{ getReconnectReasonText(item.triggerReason) }}</td>
+                <td>{{ getReconnectActionText(item.action) }}</td>
+                <td><StatusTag :text="getReconnectStatusText(item.status)" :tone="getReconnectStatusTone(item.status)" /></td>
+                <td>{{ formatAttemptText(item) }}</td>
+                <td>{{ formatDateTime(item.nextRunAt) }}</td>
+                <td>{{ item.detail || '-' }}</td>
+                <td>{{ item.lastError || '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="smart-interface-page__pagination">
+            <el-pagination
+              background
+              layout="total, prev, pager, next"
+              :current-page="reconnectLogPage.page"
+              :page-size="reconnectLogPage.pageSize"
+              :total="reconnectLogPage.total"
+              @current-change="handleReconnectLogPageChange"
             />
           </div>
         </el-tab-pane>
@@ -1722,6 +2029,38 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+.smart-interface-page__search-form--reconnect :deep(.search-form) {
+  grid-template-columns: minmax(0, 1fr) 92px;
+  align-items: end;
+}
+
+.smart-interface-page__search-form--reconnect :deep(.search-form__fields) {
+  grid-template-columns: minmax(190px, 1.45fr) repeat(4, minmax(96px, 0.58fr)) minmax(280px, 1.55fr);
+  min-width: 0;
+}
+
+.smart-interface-page__search-form--reconnect :deep(.search-form__fields > *) {
+  min-width: 0;
+}
+
+.smart-interface-page__search-form--reconnect :deep(.search-form__actions) {
+  min-width: 92px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.smart-interface-page__search-form--reconnect :deep(.unified-list-page__search-button) {
+  width: 92px;
+  justify-content: center;
+  padding: 0 10px;
+}
+
+@media (max-width: 1440px) {
+  .smart-interface-page__search-form--reconnect :deep(.search-form__fields) {
+    grid-template-columns: repeat(3, minmax(160px, 1fr));
+  }
+}
+
 .smart-interface-page__search-form :deep(.search-form__actions) {
   flex-wrap: nowrap;
   justify-content: flex-end;
@@ -1729,7 +2068,8 @@ onMounted(async () => {
 }
 
 .smart-interface-page__search-form :deep(.app-field input),
-.smart-interface-page__search-form :deep(.app-field select) {
+.smart-interface-page__search-form :deep(.app-field select),
+.smart-interface-page__search-form :deep(.el-date-editor) {
   height: 36px;
   font-size: 13px;
 }
@@ -1762,7 +2102,8 @@ onMounted(async () => {
 
 .smart-interface-page__provider-table,
 .smart-interface-page__binding-table,
-.smart-interface-page__event-table {
+.smart-interface-page__event-table,
+.smart-interface-page__reconnect-table {
   table-layout: fixed;
 }
 
@@ -1771,7 +2112,9 @@ onMounted(async () => {
 .smart-interface-page__binding-table th,
 .smart-interface-page__binding-table td,
 .smart-interface-page__event-table th,
-.smart-interface-page__event-table td {
+.smart-interface-page__event-table td,
+.smart-interface-page__reconnect-table th,
+.smart-interface-page__reconnect-table td {
   padding: 9px 10px;
   font-size: 12px;
   vertical-align: middle;
@@ -1779,7 +2122,8 @@ onMounted(async () => {
 
 .smart-interface-page__provider-table th,
 .smart-interface-page__binding-table th,
-.smart-interface-page__event-table th {
+.smart-interface-page__event-table th,
+.smart-interface-page__reconnect-table th {
   white-space: nowrap;
 }
 
@@ -1800,7 +2144,14 @@ onMounted(async () => {
 .smart-interface-page__event-table td:nth-child(6),
 .smart-interface-page__event-table td:nth-child(7),
 .smart-interface-page__event-table td:nth-child(8),
-.smart-interface-page__event-table td:nth-child(9) {
+.smart-interface-page__event-table td:nth-child(9),
+.smart-interface-page__reconnect-table td:nth-child(1),
+.smart-interface-page__reconnect-table td:nth-child(2),
+.smart-interface-page__reconnect-table td:nth-child(4),
+.smart-interface-page__reconnect-table td:nth-child(5),
+.smart-interface-page__reconnect-table td:nth-child(6),
+.smart-interface-page__reconnect-table td:nth-child(7),
+.smart-interface-page__reconnect-table td:nth-child(8) {
   white-space: nowrap;
 }
 
@@ -1877,7 +2228,7 @@ onMounted(async () => {
 }
 
 .smart-interface-page__binding-col-actions {
-  width: 220px;
+  width: 270px;
 }
 
 .smart-interface-page__event-col-code {
@@ -1920,9 +2271,50 @@ onMounted(async () => {
   width: 72px;
 }
 
+.smart-interface-page__reconnect-col-time {
+  width: 132px;
+}
+
+.smart-interface-page__reconnect-col-device {
+  width: 96px;
+}
+
+.smart-interface-page__reconnect-col-session {
+  width: 188px;
+}
+
+.smart-interface-page__reconnect-col-reason {
+  width: 98px;
+}
+
+.smart-interface-page__reconnect-col-action {
+  width: 94px;
+}
+
+.smart-interface-page__reconnect-col-status {
+  width: 82px;
+}
+
+.smart-interface-page__reconnect-col-attempt {
+  width: 58px;
+}
+
+.smart-interface-page__reconnect-col-next {
+  width: 132px;
+}
+
+.smart-interface-page__reconnect-col-detail {
+  width: 178px;
+}
+
+.smart-interface-page__reconnect-col-error {
+  width: 178px;
+}
+
 .smart-interface-page__provider-table .table-actions,
 .smart-interface-page__binding-table .table-actions,
-.smart-interface-page__event-table .table-actions {
+.smart-interface-page__event-table .table-actions,
+.smart-interface-page__reconnect-table .table-actions {
   flex-wrap: nowrap;
   gap: 4px;
 }

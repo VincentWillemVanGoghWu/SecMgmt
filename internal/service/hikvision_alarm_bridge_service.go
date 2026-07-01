@@ -42,6 +42,11 @@ type hikvisionBridgeTarget struct {
 	Password   string
 }
 
+type smartBridgeReconnectTarget struct {
+	Target     hikvisionBridgeTarget
+	BindingIDs []uint
+}
+
 type motionAggregateWindow struct {
 	Key                string
 	DedupKey           string
@@ -165,6 +170,168 @@ func (s *HikvisionAlarmBridgeService) Start() error {
 	return nil
 }
 
+func (s *HikvisionAlarmBridgeService) ReconnectTarget(target hikvisionBridgeTarget) error {
+	if strings.EqualFold(strings.TrimSpace(s.cfg.AppEnv), "test") {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureSDKLocked(); err != nil {
+		s.lastError = err.Error()
+		return err
+	}
+	s.closeSessionLocked(target.SessionKey)
+	if err := s.openSessionLocked(target); err != nil {
+		s.lastError = err.Error()
+		return err
+	}
+	s.running = len(s.sessions) > 0
+	s.lastError = ""
+	if s.logger != nil {
+		s.logger.Info("hikvision sdk bridge target reconnected",
+			zap.String("sessionKey", target.SessionKey),
+			zap.String("deviceType", target.DeviceType),
+			zap.Uint("deviceID", target.DeviceID),
+			zap.String("deviceIP", target.DeviceIP),
+		)
+	}
+	return nil
+}
+
+func (s *HikvisionAlarmBridgeService) HasSession(sessionKey string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.sessions[sessionKey]
+	return ok
+}
+
+func (s *HikvisionAlarmBridgeService) CloseDeviceSessions(deviceType string, deviceID uint) int {
+	if deviceID == 0 {
+		return 0
+	}
+	deviceType = strings.TrimSpace(strings.ToLower(deviceType))
+	if deviceType == "channel" {
+		if s.logger != nil {
+			s.logger.Info("skip closing hikvision bridge session for channel status change",
+				zap.Uint("channelID", deviceID),
+			)
+		}
+		return 0
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	closed := 0
+	for sessionKey, session := range s.sessions {
+		if session.DeviceType == deviceType && session.DeviceID == deviceID {
+			s.closeSessionLocked(sessionKey)
+			closed++
+		}
+	}
+	s.running = len(s.sessions) > 0
+	if s.logger != nil && closed > 0 {
+		s.logger.Info("hikvision sdk bridge device sessions closed",
+			zap.String("deviceType", deviceType),
+			zap.Uint("deviceID", deviceID),
+			zap.Int("closed", closed),
+		)
+	}
+	return closed
+}
+
+func (s *HikvisionAlarmBridgeService) ResolveReconnectTargetsForDevice(deviceType string, deviceID uint) ([]smartBridgeReconnectTarget, error) {
+	deviceType = strings.TrimSpace(strings.ToLower(deviceType))
+	if deviceID == 0 {
+		return nil, nil
+	}
+
+	type bindingRow struct {
+		entity.SmartDeviceBinding
+	}
+	query := s.repo.DB().
+		Table("smart_device_binding AS b").
+		Select("b.*").
+		Joins("JOIN smart_interface_provider p ON p.id = b.provider_id").
+		Joins("JOIN smart_interface_capability c ON c.id = b.capability_id").
+		Where("b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code = ? AND c.capability_code = ?",
+			true, true, true, "hikvision-sdk", "motion_detect")
+
+	switch deviceType {
+	case "camera":
+		query = query.Joins("LEFT JOIN recorder_channel ch ON b.source_type = ? AND ch.id = b.source_id", "channel").
+			Where("(b.source_type = ? AND b.source_id = ?) OR (b.source_type = ? AND ch.camera_id = ?)",
+				"camera", deviceID, "channel", deviceID)
+	case "recorder":
+		query = query.Joins("LEFT JOIN recorder_channel ch ON b.source_type = ? AND ch.id = b.source_id", "channel").
+			Where("(b.source_type = ? AND b.source_id = ?) OR (b.source_type = ? AND ch.recorder_id = ?)",
+				"recorder", deviceID, "channel", deviceID)
+	case "channel":
+		query = query.Where("b.source_type = ? AND b.source_id = ?", "channel", deviceID)
+	default:
+		return nil, nil
+	}
+
+	var rows []bindingRow
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	targetsBySession := make(map[string]*smartBridgeReconnectTarget)
+	for _, row := range rows {
+		target, ok, err := s.bindingToTarget(row.SmartDeviceBinding)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		item := targetsBySession[target.SessionKey]
+		if item == nil {
+			item = &smartBridgeReconnectTarget{Target: target}
+			targetsBySession[target.SessionKey] = item
+		}
+		item.BindingIDs = append(item.BindingIDs, row.ID)
+	}
+
+	result := make([]smartBridgeReconnectTarget, 0, len(targetsBySession))
+	for _, item := range targetsBySession {
+		sort.Slice(item.BindingIDs, func(i, j int) bool { return item.BindingIDs[i] < item.BindingIDs[j] })
+		result = append(result, *item)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Target.SessionKey < result[j].Target.SessionKey })
+	return result, nil
+}
+
+func (s *HikvisionAlarmBridgeService) ResolveReconnectTargetForBinding(bindingID uint) (smartBridgeReconnectTarget, bool, error) {
+	if bindingID == 0 {
+		return smartBridgeReconnectTarget{}, false, nil
+	}
+	type bindingRow struct {
+		entity.SmartDeviceBinding
+	}
+	var row bindingRow
+	err := s.repo.DB().
+		Table("smart_device_binding AS b").
+		Select("b.*").
+		Joins("JOIN smart_interface_provider p ON p.id = b.provider_id").
+		Joins("JOIN smart_interface_capability c ON c.id = b.capability_id").
+		Where("b.id = ? AND b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code = ? AND c.capability_code = ?",
+			bindingID, true, true, true, "hikvision-sdk", "motion_detect").
+		Scan(&row).Error
+	if err != nil {
+		return smartBridgeReconnectTarget{}, false, err
+	}
+	if row.ID == 0 {
+		return smartBridgeReconnectTarget{}, false, nil
+	}
+	target, ok, err := s.bindingToTarget(row.SmartDeviceBinding)
+	if err != nil || !ok {
+		return smartBridgeReconnectTarget{}, ok, err
+	}
+	return smartBridgeReconnectTarget{Target: target, BindingIDs: []uint{row.ID}}, true, nil
+}
+
 func (s *HikvisionAlarmBridgeService) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -223,6 +390,39 @@ func (s *HikvisionAlarmBridgeService) stopLocked() {
 	s.sessionsByUserID = make(map[int32]*hikvisionBridgeSession)
 	s.motionCooldown = make(map[string]time.Time)
 	s.running = false
+}
+
+func (s *HikvisionAlarmBridgeService) ensureSDKLocked() error {
+	if s.sdk != nil {
+		return nil
+	}
+	sdk, err := hikvision.NewSDK(s.cfg.HikvisionSDKPath)
+	if err != nil {
+		return err
+	}
+	if err := sdk.SetAlarmHandler(s.handleAlarm); err != nil {
+		_ = sdk.Cleanup()
+		return err
+	}
+	s.sdk = sdk
+	return nil
+}
+
+func (s *HikvisionAlarmBridgeService) closeSessionLocked(sessionKey string) {
+	session := s.sessions[sessionKey]
+	if session == nil {
+		return
+	}
+	if s.sdk != nil {
+		if err := s.sdk.CloseAlarm(session.AlarmHandle); err != nil && s.logger != nil {
+			s.logger.Warn("close hikvision alarm failed", zap.String("sessionKey", session.SessionKey), zap.Error(err))
+		}
+		if err := s.sdk.Logout(session.UserID); err != nil && s.logger != nil {
+			s.logger.Warn("hikvision logout failed", zap.String("sessionKey", session.SessionKey), zap.Error(err))
+		}
+	}
+	delete(s.sessionsByUserID, session.UserID)
+	delete(s.sessions, sessionKey)
 }
 
 func (s *HikvisionAlarmBridgeService) collectTargets() ([]hikvisionBridgeTarget, error) {

@@ -236,6 +236,17 @@ func (s *OperationLogService) EnsureBootstrapData() error {
 	if err := ensureMenu(&pushMenu); err != nil {
 		return err
 	}
+	deviceMenu := entity.Menu{
+		Name:     "设备管理",
+		Code:     "device",
+		Icon:     "Grid",
+		MenuType: "catalog",
+		Sort:     5,
+		Status:   "enabled",
+	}
+	if err := ensureMenu(&deviceMenu); err != nil {
+		return err
+	}
 
 	menu := entity.Menu{
 		Name:      "操作日志",
@@ -266,11 +277,31 @@ func (s *OperationLogService) EnsureBootstrapData() error {
 		return err
 	}
 
+	deviceCheckMenu := entity.Menu{
+		Name:      "巡检计划",
+		Code:      "device-check-schedules",
+		ParentID:  &deviceMenu.ID,
+		RouteName: "device-check-schedules",
+		RoutePath: "/device/check-schedules",
+		Icon:      "Timer",
+		MenuType:  "menu",
+		Sort:      5,
+		Status:    "enabled",
+	}
+	if err := ensureMenu(&deviceCheckMenu); err != nil {
+		return err
+	}
+
 	permissions := []entity.Permission{
 		{Name: "查看操作日志", Code: "log:operation:view", Status: "enabled", IsButton: true},
 		{Name: "导出操作日志", Code: "log:operation:export", Status: "enabled", IsButton: true},
 		{Name: "查看推送日志", Code: "push:log:view", Status: "enabled", IsButton: true},
 		{Name: "重试推送日志", Code: "push:log:retry", Status: "enabled", IsButton: true},
+		{Name: "查看巡检计划", Code: "device:check-plan:view", Status: "enabled", IsButton: true},
+		{Name: "新增巡检计划", Code: "device:check-plan:create", Status: "enabled", IsButton: true},
+		{Name: "编辑巡检计划", Code: "device:check-plan:update", Status: "enabled", IsButton: true},
+		{Name: "删除巡检计划", Code: "device:check-plan:delete", Status: "enabled", IsButton: true},
+		{Name: "执行巡检计划", Code: "device:check-plan:run", Status: "enabled", IsButton: true},
 	}
 	for _, permission := range permissions {
 		if err := ensurePermission(&permission); err != nil {
@@ -279,12 +310,24 @@ func (s *OperationLogService) EnsureBootstrapData() error {
 	}
 
 	for _, roleCode := range []string{"admin", "User"} {
-		for _, menuCode := range []string{"safety-operation-logs", "push", "push-logs"} {
+		for _, menuCode := range []string{"safety-operation-logs", "push", "push-logs", "device", "device-check-schedules"} {
 			if err := ensureRoleMenuBinding(roleCode, menuCode); err != nil {
 				return err
 			}
 		}
-		for _, permissionCode := range []string{"log:operation:view", "log:operation:export", "push:log:view", "push:log:retry"} {
+		permissionCodes := []string{"log:operation:view", "log:operation:export", "push:log:view", "push:log:retry"}
+		if roleCode == "admin" {
+			permissionCodes = append(permissionCodes,
+				"device:check-plan:view",
+				"device:check-plan:create",
+				"device:check-plan:update",
+				"device:check-plan:delete",
+				"device:check-plan:run",
+			)
+		} else {
+			permissionCodes = append(permissionCodes, "device:check-plan:view", "device:check-plan:run")
+		}
+		for _, permissionCode := range permissionCodes {
 			if err := ensureRolePermissionBinding(roleCode, permissionCode); err != nil {
 				return err
 			}
@@ -483,29 +526,20 @@ func (s *OperationLogService) GetDashboardStats(startAt, endAt *time.Time) map[s
 		base = base.Where("operation_time >= ?", startOfDay)
 	}
 
-	var todayCount int64
-	_ = base.Count(&todayCount).Error
-
-	successQuery := s.repo.DB().Model(&entity.OperationLog{}).Where("result_status = ?", "success")
-	successQuery = opLogApplyTimeRange(successQuery, "operation_time", startAt, endAt)
-	if startAt == nil && endAt == nil {
-		successQuery = successQuery.Where("operation_time >= ?", time.Now().Truncate(24*time.Hour))
+	var overview struct {
+		TodayCount   int64 `gorm:"column:today_count"`
+		SuccessCount int64 `gorm:"column:success_count"`
+		FailedCount  int64 `gorm:"column:failed_count"`
 	}
-	var successCount int64
-	_ = successQuery.Count(&successCount).Error
-
-	failedQuery := s.repo.DB().Model(&entity.OperationLog{}).Where("result_status = ?", "failed")
-	failedQuery = opLogApplyTimeRange(failedQuery, "operation_time", startAt, endAt)
-	if startAt == nil && endAt == nil {
-		failedQuery = failedQuery.Where("operation_time >= ?", time.Now().Truncate(24*time.Hour))
-	}
-	var failedCount int64
-	_ = failedQuery.Count(&failedCount).Error
+	_ = base.Select(`count(*) AS today_count,
+		coalesce(sum(case when result_status = 'success' then 1 else 0 end), 0) AS success_count,
+		coalesce(sum(case when result_status = 'failed' then 1 else 0 end), 0) AS failed_count`).
+		Scan(&overview).Error
 
 	return map[string]any{
-		"todayCount":   todayCount,
-		"successCount": successCount,
-		"failedCount":  failedCount,
+		"todayCount":   overview.TodayCount,
+		"successCount": overview.SuccessCount,
+		"failedCount":  overview.FailedCount,
 		"topUsers":     s.topUsers(startAt, endAt),
 		"topDevices":   s.topDevices(startAt, endAt),
 		"topActions":   s.topActions(startAt, endAt),

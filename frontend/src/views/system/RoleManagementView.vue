@@ -295,6 +295,9 @@ const menuPermissionBindingMap: Record<string, { codes?: string[]; prefixes?: st
   "device-status-logs": {
     codes: ["device:status:log:view", "device:status:check"],
   },
+  "device-check-schedules": {
+    prefixes: ["device:check-plan:"],
+  },
   "push-config": {
     prefixes: ["push:config:"],
   },

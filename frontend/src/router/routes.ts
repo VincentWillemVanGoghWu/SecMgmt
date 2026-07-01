@@ -14,6 +14,7 @@ const CameraManagementView = () => import('../views/device/CameraManagementView.
 const RecorderManagementView = () => import('../views/device/RecorderManagementView.vue')
 const ChannelManagementView = () => import('../views/device/ChannelManagementView.vue')
 const DeviceStatusLogView = () => import('../views/device/DeviceStatusLogView.vue')
+const DeviceCheckScheduleView = () => import('../views/device/DeviceCheckScheduleView.vue')
 const MonitorPreviewView = () => import('../views/monitor/MonitorPreviewView.vue')
 const PlaybackView = () => import('../views/monitor/PlaybackView.vue')
 const AiIntegrationView = () => import('../views/monitor/AiIntegrationView.vue')
@@ -117,6 +118,12 @@ export const appRoutes: RouteRecordRaw[] = [
         name: 'device-status-logs',
         component: DeviceStatusLogView,
         meta: { title: '设备管理 / 设备状态日志', requiresAuth: true },
+      },
+      {
+        path: 'device/check-schedules',
+        name: 'device-check-schedules',
+        component: DeviceCheckScheduleView,
+        meta: { title: '设备管理 / 巡检计划', requiresAuth: true },
       },
       {
         path: 'push/config',

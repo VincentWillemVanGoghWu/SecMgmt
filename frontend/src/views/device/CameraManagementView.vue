@@ -19,7 +19,6 @@ import StatusTag from "../../components/common/StatusTag.vue"
 import VideoPlayer from "../../components/video/VideoPlayer.vue"
 import { checkAllDevicesStatusApi } from "../../api/device-status"
 import {
-  checkCameraStatusApi,
   createCameraApi,
   deleteCameraUserApi,
   deleteCameraPtzPresetApi,
@@ -79,7 +78,6 @@ const fetchingDeviceIdentity = ref(false)
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
 const testingId = ref<number | null>(null)
-const checkingId = ref<number | null>(null)
 const checkingAll = ref(false)
 const previewLoading = ref(false)
 const previewDialogVisible = ref(false)
@@ -1073,19 +1071,6 @@ const handlePreviewZoom = async (action: "in" | "out") => {
   }
 }
 
-const handleCheckStatus = async (record: CameraRecord) => {
-  checkingId.value = record.id
-  try {
-    const result = await checkCameraStatusApi(record.id)
-    ElMessage.success(result.message)
-    await loadRecords()
-  } catch (error) {
-    ElMessage.error(resolveErrorMessage(error, "状态检测失败"))
-  } finally {
-    checkingId.value = null
-  }
-}
-
 const handleOpenPreview = async (record: CameraRecord) => {
   selectedPreviewId.value = record.id
   try {
@@ -1319,15 +1304,6 @@ onBeforeUnmount(async () => {
                 >
                   <el-icon><Connection /></el-icon>
                   <span>{{ testingId === record.id ? "测试中" : "测试" }}</span>
-                </button>
-                <button
-                  v-permission="'device:camera:check'"
-                  class="app-button app-button--secondary camera-page__button camera-page__table-button"
-                  :disabled="checkingId === record.id"
-                  @click="handleCheckStatus(record)"
-                >
-                  <el-icon><RefreshRight /></el-icon>
-                  <span>{{ checkingId === record.id ? "检测中" : "检测" }}</span>
                 </button>
                 <button class="app-button app-button--secondary camera-page__button camera-page__table-button" @click="handleOpenPreview(record)">
                   <el-icon><VideoPlay /></el-icon>

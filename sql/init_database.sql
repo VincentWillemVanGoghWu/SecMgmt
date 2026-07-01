@@ -33,7 +33,71 @@ CREATE TABLE device_status_log (
 CREATE INDEX ix_device_status_log_checked_at ON device_status_log (checked_at);
 CREATE INDEX ix_device_status_log_device_id ON device_status_log (device_id);
 CREATE INDEX ix_device_status_log_device_type ON device_status_log (device_type);
+CREATE INDEX ix_device_status_log_type_device_time_id ON device_status_log (device_type, device_id, checked_at, id);
+CREATE INDEX ix_device_status_log_type_status_time_id ON device_status_log (device_type, new_status, checked_at, id);
 CREATE INDEX ix_device_status_log_new_status ON device_status_log (new_status);
+
+
+CREATE TABLE device_check_schedule (
+	id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+	name VARCHAR(100) NOT NULL,
+	enabled BOOL NOT NULL,
+	frequency_per_day INTEGER NOT NULL,
+	notify_enabled BOOL NOT NULL,
+	push_config_ids_json TEXT,
+	notify_mode VARCHAR(30) NOT NULL,
+	last_run_at DATETIME,
+	next_run_at DATETIME,
+	last_success_at DATETIME,
+	last_error TEXT,
+	created_at DATETIME NOT NULL DEFAULT now(),
+	updated_at DATETIME NOT NULL DEFAULT now(),
+	PRIMARY KEY (id)
+);
+CREATE INDEX ix_device_check_schedule_enabled_next_run ON device_check_schedule (enabled, next_run_at, id);
+
+
+CREATE TABLE device_check_run (
+	id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+	schedule_id BIGINT UNSIGNED,
+	started_at DATETIME NOT NULL,
+	finished_at DATETIME,
+	status VARCHAR(20) NOT NULL,
+	checked_total INTEGER NOT NULL,
+	online_total INTEGER NOT NULL,
+	offline_total INTEGER NOT NULL,
+	disabled_total INTEGER NOT NULL,
+	changed_total INTEGER NOT NULL,
+	notified BOOL NOT NULL,
+	error_message TEXT,
+	created_at DATETIME NOT NULL DEFAULT now(),
+	PRIMARY KEY (id),
+	FOREIGN KEY(schedule_id) REFERENCES device_check_schedule (id)
+);
+CREATE INDEX ix_device_check_run_schedule_started ON device_check_run (schedule_id, started_at, id);
+CREATE INDEX ix_device_check_run_status_started ON device_check_run (status, started_at, id);
+
+
+CREATE TABLE device_check_push_log (
+	id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+	schedule_id BIGINT UNSIGNED,
+	run_id BIGINT UNSIGNED,
+	push_config_id BIGINT UNSIGNED,
+	status VARCHAR(30) NOT NULL,
+	config_name VARCHAR(100),
+	offline_count INTEGER NOT NULL,
+	message VARCHAR(255),
+	request_body TEXT,
+	response_body TEXT,
+	error_message TEXT,
+	pushed_at DATETIME NOT NULL,
+	PRIMARY KEY (id),
+	FOREIGN KEY(schedule_id) REFERENCES device_check_schedule (id),
+	FOREIGN KEY(run_id) REFERENCES device_check_run (id)
+);
+CREATE INDEX ix_device_check_push_log_config_status_time ON device_check_push_log (push_config_id, status, pushed_at, id);
+CREATE INDEX ix_device_check_push_log_run_id ON device_check_push_log (run_id);
+CREATE INDEX ix_device_check_push_log_schedule_time ON device_check_push_log (schedule_id, pushed_at, id);
 
 
 CREATE TABLE operation_log (
@@ -396,6 +460,31 @@ CREATE TABLE smart_binding_rule (
 CREATE INDEX ix_smart_binding_rule_binding_id ON smart_binding_rule (binding_id);
 CREATE INDEX ix_smart_binding_rule_enabled ON smart_binding_rule (enabled);
 
+CREATE TABLE smart_bridge_reconnect_log (
+	id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+	task_key VARCHAR(160) NOT NULL,
+	cycle_key VARCHAR(120) NOT NULL,
+	trigger_reason VARCHAR(60) NOT NULL,
+	action VARCHAR(40) NOT NULL,
+	status VARCHAR(30) NOT NULL,
+	device_type VARCHAR(30) NOT NULL,
+	device_id BIGINT UNSIGNED NOT NULL,
+	session_key VARCHAR(120) NOT NULL,
+	binding_ids_json TEXT,
+	attempt INTEGER NOT NULL,
+	max_attempts INTEGER NOT NULL,
+	next_run_at DATETIME,
+	detail TEXT,
+	last_error TEXT,
+	created_at DATETIME NOT NULL DEFAULT now(),
+	PRIMARY KEY (id)
+);
+CREATE INDEX ix_smart_bridge_reconnect_log_created ON smart_bridge_reconnect_log (created_at, id);
+CREATE INDEX ix_smart_bridge_reconnect_log_device_time ON smart_bridge_reconnect_log (device_type, device_id, created_at, id);
+CREATE INDEX ix_smart_bridge_reconnect_log_session_time ON smart_bridge_reconnect_log (session_key, created_at, id);
+CREATE INDEX ix_smart_bridge_reconnect_log_status_time ON smart_bridge_reconnect_log (status, created_at, id);
+CREATE INDEX ix_smart_bridge_reconnect_log_task_time ON smart_bridge_reconnect_log (task_key, created_at, id);
+
 
 CREATE TABLE smart_raw_event (
 	id INTEGER NOT NULL AUTO_INCREMENT, 
@@ -623,6 +712,8 @@ CREATE INDEX ix_ai_review_task_ai_flow_code ON ai_review_task (ai_flow_code);
 CREATE INDEX ix_ai_review_task_model_code ON ai_review_task (model_code);
 CREATE INDEX ix_ai_review_task_smart_event_id ON ai_review_task (smart_event_id);
 CREATE INDEX ix_ai_review_task_status ON ai_review_task (status);
+CREATE INDEX ix_ai_review_task_flow_submitted_id ON ai_review_task (ai_flow_code, submitted_at, id);
+CREATE INDEX ix_ai_review_task_status_submitted_id ON ai_review_task (status, submitted_at, id);
 CREATE INDEX ix_ai_review_task_submitted_at ON ai_review_task (submitted_at);
 CREATE UNIQUE INDEX ix_ai_review_task_task_no ON ai_review_task (task_no);
 
@@ -764,6 +855,7 @@ CREATE INDEX ix_alarm_push_log_alarm_type ON alarm_push_log (alarm_type);
 CREATE INDEX ix_alarm_push_log_channel ON alarm_push_log (channel);
 CREATE INDEX ix_alarm_push_log_factory_id ON alarm_push_log (factory_id);
 CREATE INDEX ix_alarm_push_log_push_config_id ON alarm_push_log (push_config_id);
+CREATE INDEX ix_alarm_push_log_config_status_time_id ON alarm_push_log (push_config_id, status, pushed_at, id);
 CREATE INDEX ix_alarm_push_log_pushed_at ON alarm_push_log (pushed_at);
 CREATE INDEX ix_alarm_push_log_retry_of_log_id ON alarm_push_log (retry_of_log_id);
 CREATE INDEX ix_alarm_push_log_status ON alarm_push_log (status);
@@ -793,6 +885,7 @@ INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (15, '录像机管理', 'device-recorders', 13, 'device-recorders', '/device/recorders', 'Monitor', 'menu', 2, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (16, '通道管理', 'device-channels', 13, 'device-channels', '/device/channels', 'Connection', 'menu', 3, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (17, '设备日志', 'device-status-logs', 13, 'device-status-logs', '/device/status-logs', 'DataAnalysis', 'menu', 4, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
+INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (30, '巡检计划', 'device-check-schedules', 13, 'device-check-schedules', '/device/check-schedules', 'Timer', 'menu', 5, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (18, '推送管理', 'push', NULL, NULL, NULL, 'Bell', 'catalog', 6, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (19, '推送配置', 'push-config', 18, 'push-config', '/push/config', 'Setting', 'menu', 1, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
 INSERT INTO `sys_menu` (`id`, `name`, `code`, `parent_id`, `route_name`, `route_path`, `icon`, `menu_type`, `sort`, `status`) VALUES (20, '推送日志', 'push-logs', 18, 'push-logs', '/push/logs', 'Files', 'menu', 2, 'enabled') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `parent_id` = VALUES(`parent_id`), `route_name` = VALUES(`route_name`), `route_path` = VALUES(`route_path`), `icon` = VALUES(`icon`), `menu_type` = VALUES(`menu_type`), `sort` = VALUES(`sort`), `status` = VALUES(`status`);
@@ -900,6 +993,12 @@ INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_butt
 INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (91, '查看操作日志', 'log:operation:view', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
 INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (92, '导出操作日志', 'log:operation:export', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
 
+INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (93, '查看巡检计划', 'device:check-plan:view', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
+INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (94, '新增巡检计划', 'device:check-plan:create', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
+INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (95, '编辑巡检计划', 'device:check-plan:update', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
+INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (96, '删除巡检计划', 'device:check-plan:delete', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
+INSERT INTO `sys_permission` (`id`, `name`, `code`, `status`, `remark`, `is_button`) VALUES (97, '执行巡检计划', 'device:check-plan:run', 'enabled', NULL, 1) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `code` = VALUES(`code`), `status` = VALUES(`status`), `remark` = VALUES(`remark`), `is_button` = VALUES(`is_button`);
+
 -- Seed: smart_interface_provider
 INSERT INTO `smart_interface_provider` (`id`, `provider_code`, `provider_name`, `provider_type`, `auth_type`, `base_url`, `callback_path`, `secret_encrypted`, `config_schema_json`, `enabled`, `remark`) VALUES (1, 'hikvision-sdk', '海康 SDK 报警监听', 'sdk_listener', 'none', NULL, '/smart/events/ingest/hikvision-sdk', NULL, '{"channelNo": {"type": "number", "label": "通道号"}, "armingMode": {"type": "string", "label": "布防模式"}}', 1, '系统初始化提供方') ON DUPLICATE KEY UPDATE `provider_code` = VALUES(`provider_code`), `provider_name` = VALUES(`provider_name`), `provider_type` = VALUES(`provider_type`), `auth_type` = VALUES(`auth_type`), `base_url` = VALUES(`base_url`), `callback_path` = VALUES(`callback_path`), `secret_encrypted` = VALUES(`secret_encrypted`), `config_schema_json` = VALUES(`config_schema_json`), `enabled` = VALUES(`enabled`), `remark` = VALUES(`remark`);
 INSERT INTO `smart_interface_provider` (`id`, `provider_code`, `provider_name`, `provider_type`, `auth_type`, `base_url`, `callback_path`, `secret_encrypted`, `config_schema_json`, `enabled`, `remark`) VALUES (3, 'ai-callback', 'AI 回调兼容接入', 'http_callback', 'hmac', NULL, '/ai/events/callback', NULL, '{"signatureHeader": "X-AI-Signature", "payloadMode": "json"}', 1, '兼容现有 AI 事件回调链路') ON DUPLICATE KEY UPDATE `provider_code` = VALUES(`provider_code`), `provider_name` = VALUES(`provider_name`), `provider_type` = VALUES(`provider_type`), `auth_type` = VALUES(`auth_type`), `base_url` = VALUES(`base_url`), `callback_path` = VALUES(`callback_path`), `secret_encrypted` = VALUES(`secret_encrypted`), `config_schema_json` = VALUES(`config_schema_json`), `enabled` = VALUES(`enabled`), `remark` = VALUES(`remark`);
@@ -919,9 +1018,9 @@ DELETE FROM `sys_user_role` WHERE `user_id` = 1;
 INSERT INTO `sys_user_role` (`user_id`, `role_id`) VALUES (1, 1);
 DELETE FROM `sys_role_menu` WHERE `role_id` IN (1, 2);
 INSERT INTO `sys_role_menu` (`role_id`, `menu_id`) VALUES
-(1, 1), (1, 2), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (1, 16), (1, 17), (1, 18), (1, 19), (1, 20), (1, 21), (1, 22), (1, 23), (1, 24), (1, 25), (1, 26), (1, 27), (1, 28), (1, 29),
-(2, 1), (2, 2), (2, 4), (2, 5), (2, 6), (2, 8), (2, 10), (2, 11), (2, 13), (2, 14), (2, 15), (2, 16), (2, 17), (2, 18), (2, 19), (2, 20), (2, 21), (2, 22), (2, 23), (2, 24), (2, 25), (2, 29);
+(1, 1), (1, 2), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (1, 16), (1, 17), (1, 18), (1, 19), (1, 20), (1, 21), (1, 22), (1, 23), (1, 24), (1, 25), (1, 26), (1, 27), (1, 28), (1, 29), (1, 30),
+(2, 1), (2, 2), (2, 4), (2, 5), (2, 6), (2, 8), (2, 10), (2, 11), (2, 13), (2, 14), (2, 15), (2, 16), (2, 17), (2, 18), (2, 19), (2, 20), (2, 21), (2, 22), (2, 23), (2, 24), (2, 25), (2, 29), (2, 30);
 DELETE FROM `sys_role_permission` WHERE `role_id` IN (1, 2);
 INSERT INTO `sys_role_permission` (`role_id`, `permission_id`) VALUES
-(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (1, 16), (1, 17), (1, 18), (1, 19), (1, 20), (1, 21), (1, 22), (1, 23), (1, 24), (1, 25), (1, 26), (1, 27), (1, 28), (1, 29), (1, 30), (1, 31), (1, 32), (1, 33), (1, 34), (1, 35), (1, 36), (1, 37), (1, 38), (1, 39), (1, 40), (1, 41), (1, 42), (1, 43), (1, 44), (1, 45), (1, 46), (1, 47), (1, 48), (1, 49), (1, 50), (1, 51), (1, 52), (1, 53), (1, 54), (1, 55), (1, 56), (1, 57), (1, 58), (1, 59), (1, 60), (1, 61), (1, 62), (1, 63), (1, 64), (1, 65), (1, 66), (1, 67), (1, 68), (1, 69), (1, 70), (1, 71), (1, 72), (1, 73), (1, 74), (1, 75), (1, 76), (1, 77), (1, 78), (1, 79), (1, 80), (1, 81), (1, 82), (1, 83), (1, 84), (1, 85), (1, 86), (1, 87), (1, 88), (1, 91), (1, 92),
-(2, 1), (2, 2), (2, 6), (2, 7), (2, 8), (2, 14), (2, 16), (2, 17), (2, 20), (2, 21), (2, 22), (2, 23), (2, 28), (2, 30), (2, 34), (2, 38), (2, 42), (2, 56), (2, 57), (2, 76), (2, 77), (2, 78), (2, 79), (2, 80), (2, 81), (2, 82), (2, 83), (2, 84), (2, 85), (2, 87), (2, 91), (2, 92);
+(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (1, 16), (1, 17), (1, 18), (1, 19), (1, 20), (1, 21), (1, 22), (1, 23), (1, 24), (1, 25), (1, 26), (1, 27), (1, 28), (1, 29), (1, 30), (1, 31), (1, 32), (1, 33), (1, 34), (1, 35), (1, 36), (1, 37), (1, 38), (1, 39), (1, 40), (1, 41), (1, 42), (1, 43), (1, 44), (1, 45), (1, 46), (1, 47), (1, 48), (1, 49), (1, 50), (1, 51), (1, 52), (1, 53), (1, 54), (1, 55), (1, 56), (1, 57), (1, 58), (1, 59), (1, 60), (1, 61), (1, 62), (1, 63), (1, 64), (1, 65), (1, 66), (1, 67), (1, 68), (1, 69), (1, 70), (1, 71), (1, 72), (1, 73), (1, 74), (1, 75), (1, 76), (1, 77), (1, 78), (1, 79), (1, 80), (1, 81), (1, 82), (1, 83), (1, 84), (1, 85), (1, 86), (1, 87), (1, 88), (1, 91), (1, 92), (1, 93), (1, 94), (1, 95), (1, 96), (1, 97),
+(2, 1), (2, 2), (2, 6), (2, 7), (2, 8), (2, 14), (2, 16), (2, 17), (2, 20), (2, 21), (2, 22), (2, 23), (2, 28), (2, 30), (2, 34), (2, 38), (2, 42), (2, 56), (2, 57), (2, 76), (2, 77), (2, 78), (2, 79), (2, 80), (2, 81), (2, 82), (2, 83), (2, 84), (2, 85), (2, 87), (2, 91), (2, 92), (2, 93), (2, 97);

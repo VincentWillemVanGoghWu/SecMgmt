@@ -171,3 +171,7 @@ npm run build
 - Linux 海康 SDK 目录名需要与代码、Dockerfile、`LD_LIBRARY_PATH` 保持大小写一致。
 - 智能事件接入和 AI 回调接口当前部分注册在 JWT 保护分组下，第三方接入前需要确认鉴权方案。
 - 生产环境必须替换 `JWT_SECRET_KEY`、`DEVICE_SECRET_KEY`、`AI_CALLBACK_SECRET` 等默认密钥。
+
+## 8. 开发注意事项
+
+新增功能或修复线上问题前，建议先阅读 [development-notes.md](development-notes.md)。该文档记录当前代码中需要特别注意的问题，包括推送限流统计、移动侦测去重/冷却、N+1 查询、全量列表、报表聚合、复合索引、设备状态检查、前端大组件和编码文案等，避免后续开发重复踩坑。
