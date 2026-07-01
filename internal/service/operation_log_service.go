@@ -522,7 +522,7 @@ func (s *OperationLogService) GetDashboardStats(startAt, endAt *time.Time) map[s
 	base := s.repo.DB().Model(&entity.OperationLog{})
 	base = opLogApplyTimeRange(base, "operation_time", startAt, endAt)
 	if startAt == nil && endAt == nil {
-		startOfDay := time.Now().Truncate(24 * time.Hour)
+		startOfDay := operationLocalStartOfDay(time.Now())
 		base = base.Where("operation_time >= ?", startOfDay)
 	}
 
@@ -544,6 +544,12 @@ func (s *OperationLogService) GetDashboardStats(startAt, endAt *time.Time) map[s
 		"topDevices":   s.topDevices(startAt, endAt),
 		"topActions":   s.topActions(startAt, endAt),
 	}
+}
+
+func operationLocalStartOfDay(now time.Time) time.Time {
+	localNow := now.In(time.Local)
+	year, month, day := localNow.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, localNow.Location())
 }
 
 func (s *OperationLogService) topUsers(startAt, endAt *time.Time) []map[string]any {

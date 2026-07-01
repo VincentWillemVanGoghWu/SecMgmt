@@ -318,19 +318,19 @@ func applyAlarmListFilter(db *gorm.DB, filter dto.AlarmListFilter) *gorm.DB {
 }
 
 type DashboardSummaryRow struct {
-	TodayAlarmCount     int64
-	PendingAlarmCount   int64
-	CriticalAlarmCount  int64
-	PushSuccessCount    int64
-	PushFailedCount     int64
-	CameraOnlineCount   int64
-	CameraTotalCount    int64
-	RecorderOnlineCount int64
-	RecorderTotalCount  int64
+	TodayAlarmCount     int64 `gorm:"column:today_alarm_count"`
+	PendingAlarmCount   int64 `gorm:"column:pending_alarm_count"`
+	CriticalAlarmCount  int64 `gorm:"column:critical_alarm_count"`
+	PushSuccessCount    int64 `gorm:"column:push_success_count"`
+	PushFailedCount     int64 `gorm:"column:push_failed_count"`
+	CameraOnlineCount   int64 `gorm:"column:camera_online_count"`
+	CameraTotalCount    int64 `gorm:"column:camera_total_count"`
+	RecorderOnlineCount int64 `gorm:"column:recorder_online_count"`
+	RecorderTotalCount  int64 `gorm:"column:recorder_total_count"`
 }
 
 func (r *Repository) GetDashboardSummary(startAt, endAt *time.Time, accessScope dto.AccessScopeFilter) (*DashboardSummaryRow, error) {
-	startOfDay := time.Now().Truncate(24 * time.Hour)
+	startOfDay := localStartOfDay(time.Now())
 	row := &DashboardSummaryRow{}
 
 	alarmQuery := r.db.Table("alarm_record")
@@ -340,20 +340,23 @@ func (r *Repository) GetDashboardSummary(startAt, endAt *time.Time, accessScope 
 		if err := alarmQuery.Select(`count(*) AS today_alarm_count,
 			coalesce(sum(case when status = 'pending' then 1 else 0 end), 0) AS pending_alarm_count,
 			coalesce(sum(case when alarm_level = 'critical' then 1 else 0 end), 0) AS critical_alarm_count`).
-			Scan(row).Error; err != nil {
+			Row().
+			Scan(&row.TodayAlarmCount, &row.PendingAlarmCount, &row.CriticalAlarmCount); err != nil {
 			return nil, err
 		}
 	} else if err := alarmQuery.Select(`coalesce(sum(case when alarm_time >= ? then 1 else 0 end), 0) AS today_alarm_count,
 		coalesce(sum(case when status = 'pending' then 1 else 0 end), 0) AS pending_alarm_count,
 		coalesce(sum(case when alarm_level = 'critical' then 1 else 0 end), 0) AS critical_alarm_count`, startOfDay).
-		Scan(row).Error; err != nil {
+		Row().
+		Scan(&row.TodayAlarmCount, &row.PendingAlarmCount, &row.CriticalAlarmCount); err != nil {
 		return nil, err
 	}
 
 	pushQuery := applyTimeRange(applyPushScopeToTable(r.db.Table("alarm_push_log"), "alarm_push_log", accessScope), "pushed_at", startAt, endAt)
 	if err := pushQuery.Select(`coalesce(sum(case when status = 'success' then 1 else 0 end), 0) AS push_success_count,
 		coalesce(sum(case when status = 'failed' then 1 else 0 end), 0) AS push_failed_count`).
-		Scan(row).Error; err != nil {
+		Row().
+		Scan(&row.PushSuccessCount, &row.PushFailedCount); err != nil {
 		return nil, err
 	}
 
@@ -382,6 +385,12 @@ func (r *Repository) GetDashboardSummary(startAt, endAt *time.Time, accessScope 
 	row.RecorderTotalCount = recorderRow.Total
 
 	return row, nil
+}
+
+func localStartOfDay(now time.Time) time.Time {
+	localNow := now.In(time.Local)
+	year, month, day := localNow.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, localNow.Location())
 }
 
 func applyAlarmScopeToTable(db *gorm.DB, alias string, accessScope dto.AccessScopeFilter) *gorm.DB {
