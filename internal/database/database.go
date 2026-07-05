@@ -52,7 +52,10 @@ func Migrate(db *gorm.DB) error {
 	if err := ensureDeviceCheckTables(db); err != nil {
 		return err
 	}
-	return ensureSmartBridgeReconnectLogTable(db)
+	if err := ensureSmartBridgeReconnectLogTable(db); err != nil {
+		return err
+	}
+	return ensureSmartInterfaceProviders(db)
 }
 
 func ensureDeviceCheckTables(db *gorm.DB) error {
@@ -117,6 +120,26 @@ func ensureDeviceCheckTables(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func ensureSmartInterfaceProviders(db *gorm.DB) error {
+	if !db.Migrator().HasTable("smart_interface_provider") {
+		return nil
+	}
+	return db.Exec(`
+INSERT INTO smart_interface_provider
+	(id, provider_code, provider_name, provider_type, auth_type, base_url, callback_path, secret_encrypted, config_schema_json, enabled, remark)
+VALUES
+	(2, 'hikvision-isapi', '海康 ISAPI 报警监听', 'isapi_listener', 'none', NULL, '/smart/events/ingest/hikvision-isapi', NULL, '{"channelNo": {"type": "number", "label": "通道号"}, "armingMode": {"type": "string", "label": "布防模式"}}', 1, '系统初始化提供方')
+ON DUPLICATE KEY UPDATE
+	provider_name = VALUES(provider_name),
+	provider_type = VALUES(provider_type),
+	auth_type = VALUES(auth_type),
+	callback_path = VALUES(callback_path),
+	config_schema_json = VALUES(config_schema_json),
+	enabled = VALUES(enabled),
+	remark = VALUES(remark)
+`).Error
 }
 
 func ensureSmartBridgeReconnectLogTable(db *gorm.DB) error {

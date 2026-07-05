@@ -37,6 +37,7 @@ func New(cfg *config.Config, repo *repository.Repository, operationLogService *s
 	api := engine.Group("/api")
 	api.POST("/auth/login", handlers.Auth.Login)
 	api.GET("/sse/alarms", handlers.Platform.AlarmSSE)
+	api.POST("/smart/events/ingest/:providerCode", handlers.Platform.IngestSmartProviderEvent)
 
 	protected := api.Group("/")
 	protected.Use(middleware.Auth(cfg.JWTSecretKey, repo))
@@ -188,7 +189,6 @@ func New(cfg *config.Config, repo *repository.Repository, operationLogService *s
 	protected.POST("/smart/bindings/:id/rules", withPermission("smart:rule:create", handlers.Platform.CreateSmartBindingRule)...)
 	protected.PUT("/smart/bindings/:id/rules/:ruleId", withPermission("smart:rule:update", handlers.Platform.UpdateSmartBindingRule)...)
 	protected.DELETE("/smart/bindings/:id/rules/:ruleId", withPermission("smart:rule:delete", handlers.Platform.DeleteSmartBindingRule)...)
-	protected.POST("/smart/events/ingest/:providerCode", handlers.Platform.IngestSmartProviderEvent)
 	protected.GET("/smart/raw-events", withPermission("smart:event:view", handlers.Platform.ListSmartRawEvents)...)
 	protected.GET("/smart/events", withPermission("smart:event:view", handlers.Platform.ListSmartEvents)...)
 	protected.GET("/smart/bridge/reconnect-logs", withPermission("smart:event:view", handlers.Platform.ListSmartBridgeReconnectLogs)...)

@@ -1654,8 +1654,8 @@ func (h *PlatformHandler) DeleteSmartBindingRule(c *gin.Context) {
 
 func (h *PlatformHandler) IngestSmartProviderEvent(c *gin.Context) {
 	providerCode := c.Param("providerCode")
-	var payload any
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	payload, err := readSmartProviderIngestPayload(c)
+	if err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1665,12 +1665,59 @@ func (h *PlatformHandler) IngestSmartProviderEvent(c *gin.Context) {
 			headers[key] = values[0]
 		}
 	}
+	headers["X-Request-Client-IP"] = c.ClientIP()
 	data, err := h.platformService.IngestSmartProviderEvent(providerCode, payload, headers)
 	if err != nil {
 		handlePlatformError(c, err)
 		return
 	}
 	response.OK(c, data)
+}
+
+func readSmartProviderIngestPayload(c *gin.Context) (any, error) {
+	contentType := strings.ToLower(c.GetHeader("Content-Type"))
+	if strings.Contains(contentType, "multipart/form-data") {
+		if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+			return nil, err
+		}
+		files := make([]service.SmartIngestFile, 0)
+		if c.Request.MultipartForm != nil {
+			for _, fileHeaders := range c.Request.MultipartForm.File {
+				for _, fileHeader := range fileHeaders {
+					file, err := fileHeader.Open()
+					if err != nil {
+						return nil, err
+					}
+					data, readErr := io.ReadAll(file)
+					_ = file.Close()
+					if readErr != nil {
+						return nil, readErr
+					}
+					files = append(files, service.SmartIngestFile{
+						Filename:    fileHeader.Filename,
+						ContentType: fileHeader.Header.Get("Content-Type"),
+						Data:        data,
+					})
+				}
+			}
+			return map[string]any{
+				"fields": c.Request.MultipartForm.Value,
+				"files":  files,
+			}, nil
+		}
+		return map[string]any{"files": files}, nil
+	}
+	if strings.Contains(contentType, "json") {
+		var payload any
+		if err := c.ShouldBindJSON(&payload); err == nil {
+			return payload, nil
+		}
+	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return nil, err
+	}
+	return string(body), nil
 }
 
 func (h *PlatformHandler) ListSmartRawEvents(c *gin.Context) {

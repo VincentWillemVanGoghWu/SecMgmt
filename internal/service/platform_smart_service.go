@@ -883,6 +883,12 @@ func (s *PlatformService) IngestSmartProviderEvent(providerCode string, payload 
 	if err := s.db().Where("provider_code = ?", providerCode).First(&provider).Error; err != nil {
 		return nil, err
 	}
+	if providerCode == "hikvision-isapi" {
+		if s.hikvisionBridge == nil {
+			return nil, fmt.Errorf("hikvision bridge is not attached")
+		}
+		return s.hikvisionBridge.IngestISAPIMotionEvent(providerCode, payload, headers)
+	}
 	raw := entity.SmartRawEvent{
 		ProviderID:     provider.ID,
 		EventNo:        fmt.Sprintf("RAW-%s", strings.ToUpper(uuid.NewString())),

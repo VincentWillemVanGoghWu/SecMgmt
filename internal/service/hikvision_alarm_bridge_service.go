@@ -1,10 +1,13 @@
 package service
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +51,12 @@ type smartBridgeReconnectTarget struct {
 	BindingIDs []uint
 }
 
+type SmartIngestFile struct {
+	Filename    string
+	ContentType string
+	Data        []byte
+}
+
 type motionAggregateWindow struct {
 	Key                string
 	DedupKey           string
@@ -81,6 +90,8 @@ type motionAggregateWindow struct {
 }
 
 const smartEventMergeWindow = 2 * time.Second
+
+var regexpXMLTag = regexp.MustCompile(`(?s)<([A-Za-z0-9_:.-]+)[^>]*>\s*([^<>]+?)\s*</[A-Za-z0-9_:.-]+>`)
 
 type HikvisionAlarmBridgeService struct {
 	cfg    *config.Config
@@ -623,7 +634,7 @@ func (s *HikvisionAlarmBridgeService) handleAlarm(alarm hikvision.MotionAlarm) {
 
 	for _, rawChannelNo := range alarm.Channels {
 		channelNo := hikvision.NormalizeAlarmChannelNo(session.DeviceInfo, rawChannelNo)
-		if err := s.persistMotionEvent(session, alarm.DeviceIP, rawChannelNo, channelNo, int(alarm.Command), alarm.ImageData, alarm.ImageType); err != nil {
+		if err := s.persistMotionEventForProvider("hikvision-sdk", session, alarm.DeviceIP, rawChannelNo, channelNo, int(alarm.Command), alarm.ImageData, alarm.ImageType); err != nil {
 			s.logger.Error("persist hikvision motion event failed",
 				zap.String("sessionKey", session.SessionKey),
 				zap.Int("channelNo", channelNo),
@@ -631,6 +642,326 @@ func (s *HikvisionAlarmBridgeService) handleAlarm(alarm hikvision.MotionAlarm) {
 			)
 		}
 	}
+}
+
+func (s *HikvisionAlarmBridgeService) IngestISAPIMotionEvent(providerCode string, payload any, headers map[string]string) (map[string]any, error) {
+	event, ok := parseHikvisionISAPIMotionPayload(payload, headers)
+	if !ok {
+		return map[string]any{"accepted": false, "reason": "not a hikvision motion event"}, nil
+	}
+	session, ok, err := s.resolveISAPISession(event.DeviceIP, event.ChannelNo)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return map[string]any{"accepted": false, "reason": "device or channel not matched"}, nil
+	}
+	if event.RawChannelNo <= 0 {
+		event.RawChannelNo = event.ChannelNo
+	}
+	if err := s.persistMotionEventForProvider(providerCode, session, event.DeviceIP, event.RawChannelNo, event.ChannelNo, 0x6009, event.ImageData, event.ImageType); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"accepted":  true,
+		"provider":  providerCode,
+		"deviceIp":  event.DeviceIP,
+		"channelNo": event.ChannelNo,
+		"hasImage":  len(event.ImageData) > 0,
+	}, nil
+}
+
+type hikvisionISAPIMotionEvent struct {
+	DeviceIP     string
+	RawChannelNo int
+	ChannelNo    int
+	ImageData    []byte
+	ImageType    byte
+}
+
+func parseHikvisionISAPIMotionPayload(payload any, headers map[string]string) (hikvisionISAPIMotionEvent, bool) {
+	var event hikvisionISAPIMotionEvent
+	values := flattenPayloadValues(payload)
+	bodyText := payloadText(payload)
+	for key, value := range headers {
+		values = append(values, flattenedPayloadValue{Key: key, Value: value})
+	}
+	event.DeviceIP = firstPayloadText(values, "ipAddress", "ipv4Address", "deviceIP", "sourceIP", "remoteHost")
+	if event.DeviceIP == "" {
+		event.DeviceIP = firstClientIP(headers)
+	}
+	event.ChannelNo = firstPayloadInt(values, "channelID", "channelNo", "channel", "dynChannelID", "inputProxyChannelID")
+	event.RawChannelNo = event.ChannelNo
+	if event.ChannelNo <= 0 {
+		event.ChannelNo = extractChannelNoFromText(bodyText)
+		event.RawChannelNo = event.ChannelNo
+	}
+	state := strings.ToLower(strings.TrimSpace(firstPayloadText(values, "eventState", "state", "status")))
+	if state != "" && state != "active" && state != "start" && state != "true" && state != "1" {
+		return event, false
+	}
+	eventType := firstPayloadText(values, "eventType", "eventTypeCode", "eventDescription", "event")
+	if eventType == "" {
+		eventType = bodyText
+	}
+	if !isHikvisionMotionEventText(eventType) && !isHikvisionMotionEventText(bodyText) {
+		return event, false
+	}
+	event.ImageData, event.ImageType = firstPayloadImage(payload)
+	if event.ChannelNo <= 0 {
+		event.ChannelNo = 1
+		event.RawChannelNo = 1
+	}
+	return event, true
+}
+
+type flattenedPayloadValue struct {
+	Key   string
+	Value string
+}
+
+func flattenPayloadValues(payload any) []flattenedPayloadValue {
+	values := make([]flattenedPayloadValue, 0)
+	var walk func(prefix string, value any)
+	walk = func(prefix string, value any) {
+		switch item := value.(type) {
+		case map[string]any:
+			for key, child := range item {
+				walk(key, child)
+			}
+		case map[string][]string:
+			for key, list := range item {
+				for _, child := range list {
+					values = append(values, flattenedPayloadValue{Key: key, Value: child})
+				}
+			}
+		case []any:
+			for _, child := range item {
+				walk(prefix, child)
+			}
+		case []string:
+			for _, child := range item {
+				values = append(values, flattenedPayloadValue{Key: prefix, Value: child})
+			}
+		case string:
+			values = append(values, flattenedPayloadValue{Key: prefix, Value: item})
+			values = append(values, extractXMLValues(item)...)
+		case []byte:
+			text := string(item)
+			values = append(values, flattenedPayloadValue{Key: prefix, Value: text})
+			values = append(values, extractXMLValues(text)...)
+		case float64:
+			values = append(values, flattenedPayloadValue{Key: prefix, Value: fmt.Sprintf("%.0f", item)})
+		case int:
+			values = append(values, flattenedPayloadValue{Key: prefix, Value: fmt.Sprintf("%d", item)})
+		case int64:
+			values = append(values, flattenedPayloadValue{Key: prefix, Value: fmt.Sprintf("%d", item)})
+		case json.Number:
+			values = append(values, flattenedPayloadValue{Key: prefix, Value: item.String()})
+		case bool:
+			values = append(values, flattenedPayloadValue{Key: prefix, Value: fmt.Sprintf("%t", item)})
+		}
+	}
+	walk("", payload)
+	return values
+}
+
+func extractXMLValues(text string) []flattenedPayloadValue {
+	result := make([]flattenedPayloadValue, 0)
+	matches := regexpXMLTag.FindAllStringSubmatch(text, -1)
+	for _, match := range matches {
+		if len(match) >= 3 {
+			result = append(result, flattenedPayloadValue{Key: match[1], Value: strings.TrimSpace(match[2])})
+		}
+	}
+	return result
+}
+
+func payloadText(payload any) string {
+	switch item := payload.(type) {
+	case string:
+		return item
+	case []byte:
+		return string(item)
+	case map[string]any:
+		if body, ok := item["body"].(string); ok {
+			return body
+		}
+	}
+	return ""
+}
+
+func firstPayloadText(values []flattenedPayloadValue, keys ...string) string {
+	for _, key := range keys {
+		for _, item := range values {
+			if strings.EqualFold(strings.TrimSpace(item.Key), key) && strings.TrimSpace(item.Value) != "" {
+				return strings.TrimSpace(item.Value)
+			}
+		}
+	}
+	return ""
+}
+
+func firstPayloadInt(values []flattenedPayloadValue, keys ...string) int {
+	for _, key := range keys {
+		for _, item := range values {
+			if !strings.EqualFold(strings.TrimSpace(item.Key), key) {
+				continue
+			}
+			var parsed int
+			if _, err := fmt.Sscanf(strings.TrimSpace(item.Value), "%d", &parsed); err == nil && parsed > 0 {
+				return parsed
+			}
+		}
+	}
+	return 0
+}
+
+func firstPayloadImage(payload any) ([]byte, byte) {
+	if item, ok := payload.(map[string]any); ok {
+		if files, ok := item["files"].([]SmartIngestFile); ok {
+			for _, file := range files {
+				if len(file.Data) == 0 {
+					continue
+				}
+				contentType := strings.ToLower(file.ContentType)
+				if strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg") || looksLikeJPEG(file.Data) {
+					image := make([]byte, len(file.Data))
+					copy(image, file.Data)
+					return image, 1
+				}
+			}
+		}
+		for _, key := range []string{"imageData", "image", "pictureData", "picture", "picData"} {
+			if text, ok := item[key].(string); ok {
+				if image := decodeBase64Image(text); len(image) > 0 {
+					return image, 1
+				}
+			}
+		}
+	}
+	return nil, 0
+}
+
+func decodeBase64Image(value string) []byte {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if comma := strings.Index(value, ","); comma >= 0 {
+		value = value[comma+1:]
+	}
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		data, err = base64.RawStdEncoding.DecodeString(value)
+	}
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	return data
+}
+
+func firstClientIP(headers map[string]string) string {
+	for _, key := range []string{"X-Forwarded-For", "X-Real-IP", "X-Request-Client-IP"} {
+		value := strings.TrimSpace(headers[key])
+		if value == "" {
+			continue
+		}
+		if comma := strings.Index(value, ","); comma >= 0 {
+			value = strings.TrimSpace(value[:comma])
+		}
+		if host, _, err := net.SplitHostPort(value); err == nil {
+			value = host
+		}
+		if net.ParseIP(value) != nil {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractChannelNoFromText(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	for _, pattern := range []string{"channelID", "channelNo", "channel"} {
+		re := regexp.MustCompile(`(?i)` + pattern + `[^0-9]{0,16}([0-9]+)`)
+		if match := re.FindStringSubmatch(text); len(match) >= 2 {
+			var parsed int
+			if _, err := fmt.Sscanf(match[1], "%d", &parsed); err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
+}
+
+func isHikvisionMotionEventText(value string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", ""))
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	switch {
+	case strings.Contains(normalized, "vmd"):
+		return true
+	case strings.Contains(normalized, "motion"):
+		return true
+	case strings.Contains(normalized, "fielddetection"):
+		return true
+	case strings.Contains(normalized, "videomotion"):
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) resolveISAPISession(deviceIP string, channelNo int) (*hikvisionBridgeSession, bool, error) {
+	deviceIP = strings.TrimSpace(deviceIP)
+	db := s.repo.DB()
+	if deviceIP != "" {
+		var recorder entity.RecorderDevice
+		if err := db.Where("ip = ?", deviceIP).First(&recorder).Error; err == nil {
+			return &hikvisionBridgeSession{
+				SessionKey: fmt.Sprintf("isapi-recorder:%d", recorder.ID),
+				DeviceType: "recorder",
+				DeviceID:   recorder.ID,
+				DeviceName: recorder.Name,
+				DeviceIP:   recorder.IP,
+			}, true, nil
+		} else if err != gorm.ErrRecordNotFound {
+			return nil, false, err
+		}
+		var camera entity.CameraDevice
+		if err := db.Where("ip = ?", deviceIP).First(&camera).Error; err == nil {
+			return &hikvisionBridgeSession{
+				SessionKey: fmt.Sprintf("isapi-camera:%d", camera.ID),
+				DeviceType: "camera",
+				DeviceID:   camera.ID,
+				DeviceName: camera.Name,
+				DeviceIP:   camera.IP,
+			}, true, nil
+		} else if err != gorm.ErrRecordNotFound {
+			return nil, false, err
+		}
+	}
+	if channelNo > 0 {
+		var channel entity.RecorderChannel
+		if err := db.Where("channel_no = ?", channelNo).Order("id ASC").First(&channel).Error; err == nil {
+			var recorder entity.RecorderDevice
+			if err := db.First(&recorder, channel.RecorderID).Error; err != nil {
+				return nil, false, err
+			}
+			return &hikvisionBridgeSession{
+				SessionKey: fmt.Sprintf("isapi-recorder:%d", recorder.ID),
+				DeviceType: "recorder",
+				DeviceID:   recorder.ID,
+				DeviceName: recorder.Name,
+				DeviceIP:   firstNonEmpty(deviceIP, recorder.IP),
+			}, true, nil
+		} else if err != gorm.ErrRecordNotFound {
+			return nil, false, err
+		}
+	}
+	return nil, false, nil
 }
 
 func (s *HikvisionAlarmBridgeService) aggregateMotionEvent(
@@ -996,6 +1327,19 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 	alarmImage []byte,
 	alarmImageType byte,
 ) error {
+	return s.persistMotionEventForProvider("hikvision-sdk", session, deviceIP, rawChannelNo, channelNo, command, alarmImage, alarmImageType)
+}
+
+func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
+	providerCode string,
+	session *hikvisionBridgeSession,
+	deviceIP string,
+	rawChannelNo int,
+	channelNo int,
+	command int,
+	alarmImage []byte,
+	alarmImageType byte,
+) error {
 	eventTime := time.Now()
 	unlockPersist := s.lockAlarmDedupKey(fmt.Sprintf("motion-persist:%s:%d", session.SessionKey, channelNo))
 	defer unlockPersist()
@@ -1041,7 +1385,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 			}
 		}
 
-		provider, capability, binding, rule, err := s.matchMotionBinding(tx, camera, recorder, channel)
+		provider, capability, binding, rule, err := s.matchMotionBindingForProvider(tx, providerCode, camera, recorder, channel)
 		if err != nil {
 			return err
 		}
@@ -1075,7 +1419,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 			payload["imageSource"] = "sdk-alarm-package"
 		}
 		rawEventID := fmt.Sprintf("hikvision-motion:%s:%d:%d:%s", binding.SourceType, binding.SourceID, channelNo, uuid.NewString()[:12])
-		headers := map[string]string{"x-hikvision-bridge": "sdk-callback"}
+		headers := map[string]string{"x-hikvision-bridge": providerCode}
 
 		rawEvent := entity.SmartRawEvent{
 			ProviderID:     provider.ID,
@@ -1236,8 +1580,18 @@ func (s *HikvisionAlarmBridgeService) matchMotionBinding(
 	recorder *entity.RecorderDevice,
 	channel *entity.RecorderChannel,
 ) (*entity.SmartInterfaceProvider, *entity.SmartInterfaceCapability, *entity.SmartDeviceBinding, *entity.SmartBindingRule, error) {
+	return s.matchMotionBindingForProvider(tx, "hikvision-sdk", camera, recorder, channel)
+}
+
+func (s *HikvisionAlarmBridgeService) matchMotionBindingForProvider(
+	tx *gorm.DB,
+	providerCode string,
+	camera *entity.CameraDevice,
+	recorder *entity.RecorderDevice,
+	channel *entity.RecorderChannel,
+) (*entity.SmartInterfaceProvider, *entity.SmartInterfaceCapability, *entity.SmartDeviceBinding, *entity.SmartBindingRule, error) {
 	provider := &entity.SmartInterfaceProvider{}
-	if err := tx.Where("provider_code = ? AND enabled = ?", "hikvision-sdk", true).First(provider).Error; err != nil {
+	if err := tx.Where("provider_code = ? AND enabled = ?", providerCode, true).First(provider).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil, nil, nil, nil
 		}
