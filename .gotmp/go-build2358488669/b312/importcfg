@@ -1,0 +1,9 @@
+# import config
+packagefile fmt=D:\VibeCoding\SecmgmtV2\.gocache\8f\8ffde53c5f7916390dd5ca311acb38c82eade225e87681c1c6d2ec203285bbc9-d
+packagefile gorm.io/driver/mysql=D:\VibeCoding\SecmgmtV2\.gocache\8d\8d5188ae524c3927478375034d9ae0638769bca7981c7132673c03aef23bd558-d
+packagefile gorm.io/gorm=D:\VibeCoding\SecmgmtV2\.gocache\9c\9cccdcee956a4cbae2e4c10e8d930060d69c68b6f62ffdc60b93781dc4694765-d
+packagefile gorm.io/gorm/logger=D:\VibeCoding\SecmgmtV2\.gocache\45\457c5131a19b08c8cba094d513194bbe2b8b5c6d27c265ad65f1f5ec1aa2c5dd-d
+packagefile log=D:\VibeCoding\SecmgmtV2\.gocache\27\27474c680611d8bb214a2fcae0ca4ba853e2438aec7633711acc32f924af242b-d
+packagefile os=D:\VibeCoding\SecmgmtV2\.gocache\48\48486b785849fda8c1a2c4af24f5a674a38a38c0ed3cde036b7639334f3be0ed-d
+packagefile secmgmt_go/internal/domain/entity=D:\VibeCoding\SecmgmtV2\.gocache\27\2764627dbf3753d34c688d5355f0413d8f0b5b8dad7f90f2fbec65618a8a77c2-d
+packagefile time=D:\VibeCoding\SecmgmtV2\.gocache\d8\d8c9d930f581aba89b15c6f852f2197c193cdaa2280033f5272302fd97329ec6-d

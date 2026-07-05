@@ -68,25 +68,25 @@ func (s *PlatformService) tryReloadHikvisionBridge(trigger string) {
 }
 
 func (s *PlatformService) reloadHikvisionBridgeForProvider(providerCode, trigger string) {
-	if providerCode != "hikvision-sdk" {
+	if !shouldReloadHikvisionProvider(providerCode) {
 		return
 	}
 	s.tryReloadHikvisionBridge(trigger)
 }
 
 func (s *PlatformService) reloadHikvisionBridgeForBinding(providerCode, capabilityCode, trigger string) {
-	if providerCode != "hikvision-sdk" || capabilityCode != "motion_detect" {
+	if !shouldReloadHikvisionBinding(providerCode, capabilityCode) {
 		return
 	}
 	s.tryReloadHikvisionBridge(trigger)
 }
 
 func shouldReloadHikvisionProvider(providerCode string) bool {
-	return providerCode == "hikvision-sdk"
+	return providerCode == "hikvision-sdk" || providerCode == "hikvision-isapi"
 }
 
 func shouldReloadHikvisionBinding(providerCode, capabilityCode string) bool {
-	return providerCode == "hikvision-sdk" && capabilityCode == "motion_detect"
+	return shouldReloadHikvisionProvider(providerCode) && capabilityCode == "motion_detect"
 }
 
 type UserPayload struct {

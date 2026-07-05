@@ -1,0 +1,13 @@
+# import config
+packagefile context=D:\VibeCoding\SecmgmtV2\.gocache\72\722b6aa2f2330bad30b9d2db9576d41a9deafdfe2cfe2cba6d8c348dcc707c9b-d
+packagefile errors=D:\VibeCoding\SecmgmtV2\.gocache\14\14e0fccde2a6dba5f9398fa0a51e9e9ac26fddbdc365db6193b9334013dd4f61-d
+packagefile go.uber.org/zap=D:\VibeCoding\SecmgmtV2\.gocache\53\534b4784a2d28c66dff42d7e061c4ea2a79f6e1f632685cf228f76c0b56abc8a-d
+packagefile log=D:\VibeCoding\SecmgmtV2\.gocache\27\27474c680611d8bb214a2fcae0ca4ba853e2438aec7633711acc32f924af242b-d
+packagefile net/http=D:\VibeCoding\SecmgmtV2\.gocache\a1\a1bfa8e5b0d6b60a236e569442abaaaa82b8cc23577f6954eb96bba944cf9b17-d
+packagefile os=D:\VibeCoding\SecmgmtV2\.gocache\48\48486b785849fda8c1a2c4af24f5a674a38a38c0ed3cde036b7639334f3be0ed-d
+packagefile os/signal=D:\VibeCoding\SecmgmtV2\.gocache\d5\d59d96cffcbf0e7fffcefe94452b87a1da6bd3e45554fad2051a02a056e15855-d
+packagefile path/filepath=D:\VibeCoding\SecmgmtV2\.gocache\83\8339c4485f311f7aea481a1318479b68a2e031fef2ffe4c6894a7c0c3a8f34ac-d
+packagefile secmgmt_go/internal/bootstrap=D:\VibeCoding\SecmgmtV2\.gotmp\go-build391283520\b202\_pkg_.a
+packagefile syscall=D:\VibeCoding\SecmgmtV2\.gocache\fe\fe0b436deabe08219927c8b5f80f458d746cb11cc6d0cc0ace79b61c63aeb795-d
+packagefile time=D:\VibeCoding\SecmgmtV2\.gocache\d8\d8c9d930f581aba89b15c6f852f2197c193cdaa2280033f5272302fd97329ec6-d
+packagefile runtime=D:\VibeCoding\SecmgmtV2\.gocache\65\657b68bd9f59c0014b8dc3bc6f0dcd084df2bee1f33ee80a7844a50bf2f8091c-d

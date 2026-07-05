@@ -1,14 +1,26 @@
 package service
 
 import (
+	"bufio"
+	"context"
+	"crypto/md5"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,14 +48,91 @@ type hikvisionBridgeSession struct {
 }
 
 type hikvisionBridgeTarget struct {
-	SessionKey string
-	DeviceType string
-	DeviceID   uint
-	DeviceName string
-	DeviceIP   string
-	SDKPort    int
-	Username   string
-	Password   string
+	ProviderCode string
+	SessionKey   string
+	DeviceType   string
+	DeviceID     uint
+	DeviceName   string
+	DeviceIP     string
+	SDKPort      int
+	HTTPPort     int
+	Username     string
+	Password     string
+}
+
+type hikvisionISAPIStreamSession struct {
+	SessionKey  string
+	DeviceType  string
+	DeviceID    uint
+	DeviceName  string
+	DeviceIP    string
+	HTTPPort    int
+	Username    string
+	Password    string
+	Connected   bool
+	LastError   string
+	LastEventAt *time.Time
+	LastByteAt  *time.Time
+	cancel      context.CancelFunc
+}
+
+type idleReadCloser struct {
+	source  io.ReadCloser
+	timeout time.Duration
+	onIdle  func()
+	timer   *time.Timer
+	mu      sync.Mutex
+	idle    bool
+	closed  bool
+}
+
+func newIdleReadCloser(source io.ReadCloser, timeout time.Duration, onIdle func()) *idleReadCloser {
+	reader := &idleReadCloser{source: source, timeout: timeout, onIdle: onIdle}
+	reader.timer = time.AfterFunc(timeout, func() {
+		var callback func()
+		reader.mu.Lock()
+		if !reader.closed {
+			reader.idle = true
+			callback = reader.onIdle
+			_ = reader.source.Close()
+		}
+		reader.mu.Unlock()
+		if callback != nil {
+			callback()
+		}
+	})
+	return reader
+}
+
+func (r *idleReadCloser) Read(p []byte) (int, error) {
+	n, err := r.source.Read(p)
+	if n > 0 {
+		r.mu.Lock()
+		if !r.closed && r.timer != nil {
+			r.timer.Reset(r.timeout)
+		}
+		r.mu.Unlock()
+	}
+	if err != nil && r.isIdle() {
+		return n, errHikvisionISAPIStreamIdle
+	}
+	return n, err
+}
+
+func (r *idleReadCloser) Close() error {
+	r.mu.Lock()
+	r.closed = true
+	if r.timer != nil {
+		r.timer.Stop()
+	}
+	r.mu.Unlock()
+	return r.source.Close()
+}
+
+func (r *idleReadCloser) isIdle() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.idle
 }
 
 type smartBridgeReconnectTarget struct {
@@ -93,6 +182,11 @@ const smartEventMergeWindow = 2 * time.Second
 
 var regexpXMLTag = regexp.MustCompile(`(?s)<([A-Za-z0-9_:.-]+)[^>]*>\s*([^<>]+?)\s*</[A-Za-z0-9_:.-]+>`)
 
+var errHikvisionMotionBindingNotMatched = errors.New("hikvision motion binding not matched")
+var errHikvisionISAPIStreamIdle = errors.New("hikvision isapi alert stream idle timeout")
+
+const hikvisionISAPIStreamIdleTimeout = 45 * time.Second
+
 type HikvisionAlarmBridgeService struct {
 	cfg    *config.Config
 	repo   *repository.Repository
@@ -104,6 +198,7 @@ type HikvisionAlarmBridgeService struct {
 	sdk                 *hikvision.SDK
 	sessions            map[string]*hikvisionBridgeSession
 	sessionsByUserID    map[int32]*hikvisionBridgeSession
+	isapiSessions       map[string]*hikvisionISAPIStreamSession
 	alarmDedupLocks     map[string]*sync.Mutex
 	motionWindows       map[string]*motionAggregateWindow
 	motionCooldown      map[string]time.Time
@@ -121,6 +216,7 @@ func NewHikvisionAlarmBridgeService(cfg *config.Config, repo *repository.Reposit
 		logger:           logger,
 		sessions:         make(map[string]*hikvisionBridgeSession),
 		sessionsByUserID: make(map[int32]*hikvisionBridgeSession),
+		isapiSessions:    make(map[string]*hikvisionISAPIStreamSession),
 		alarmDedupLocks:  make(map[string]*sync.Mutex),
 		motionWindows:    make(map[string]*motionAggregateWindow),
 		motionCooldown:   make(map[string]time.Time),
@@ -137,46 +233,71 @@ func (s *HikvisionAlarmBridgeService) Start() error {
 	s.stopLocked()
 	s.lastError = ""
 
-	sdk, err := hikvision.NewSDK(s.cfg.HikvisionSDKPath)
+	targets, err := s.collectTargets("hikvision-sdk", "hikvision-isapi")
 	if err != nil {
 		s.lastError = err.Error()
 		return err
 	}
-	if err := sdk.SetAlarmHandler(s.handleAlarm); err != nil {
-		s.lastError = err.Error()
-		return err
-	}
-	s.sdk = sdk
-
-	targets, err := s.collectTargets()
-	if err != nil {
-		s.lastError = err.Error()
-		return err
-	}
-	s.logger.Info("hikvision sdk bridge targets collected",
+	s.logger.Info("hikvision alarm bridge targets collected",
 		zap.Int("bindingCount", s.bindingCount),
 		zap.Int("targetCount", len(targets)),
 		zap.Int("skippedBindingCount", s.skippedBindingCount),
 		zap.Int("mergedBindingCount", s.mergedBindingCount),
 	)
 
-	var startupErrors []string
+	var sdkTargets []hikvisionBridgeTarget
+	var isapiTargets []hikvisionBridgeTarget
 	for _, target := range targets {
-		if err := s.openSessionLocked(target); err != nil {
+		switch target.ProviderCode {
+		case "hikvision-isapi":
+			isapiTargets = append(isapiTargets, target)
+		default:
+			sdkTargets = append(sdkTargets, target)
+		}
+	}
+	var startupErrors []string
+	if len(sdkTargets) > 0 {
+		sdk, err := hikvision.NewSDK(s.cfg.HikvisionSDKPath)
+		if err != nil {
+			startupErrors = append(startupErrors, fmt.Sprintf("hikvision-sdk: %v", err))
+			s.logger.Warn("hikvision sdk bridge init failed", zap.Error(err))
+		} else if err := sdk.SetAlarmHandler(s.handleAlarm); err != nil {
+			startupErrors = append(startupErrors, fmt.Sprintf("hikvision-sdk: %v", err))
+			s.logger.Warn("hikvision sdk bridge alarm handler setup failed", zap.Error(err))
+			_ = sdk.Cleanup()
+		} else {
+			s.sdk = sdk
+		}
+	}
+
+	if s.sdk != nil {
+		for _, target := range sdkTargets {
+			if err := s.openSessionLocked(target); err != nil {
+				startupErrors = append(startupErrors, fmt.Sprintf("%s: %v", target.SessionKey, err))
+				s.logger.Warn("hikvision sdk bridge open session failed",
+					zap.String("sessionKey", target.SessionKey),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+	for _, target := range isapiTargets {
+		if err := s.openISAPIStreamLocked(target); err != nil {
 			startupErrors = append(startupErrors, fmt.Sprintf("%s: %v", target.SessionKey, err))
-			s.logger.Warn("hikvision sdk bridge open session failed",
+			s.logger.Warn("hikvision isapi stream open failed",
 				zap.String("sessionKey", target.SessionKey),
 				zap.Error(err),
 			)
 		}
 	}
-	s.running = len(s.sessions) > 0
+	s.running = len(s.sessions) > 0 || len(s.isapiSessions) > 0
 	if len(startupErrors) > 0 {
 		s.lastError = strings.Join(startupErrors, "; ")
 	}
-	s.logger.Info("hikvision sdk bridge startup finished",
+	s.logger.Info("hikvision alarm bridge startup finished",
 		zap.Bool("running", s.running),
 		zap.Int("sessionCount", len(s.sessions)),
+		zap.Int("isapiSessionCount", len(s.isapiSessions)),
 		zap.String("lastError", s.lastError),
 	)
 	return nil
@@ -189,19 +310,28 @@ func (s *HikvisionAlarmBridgeService) ReconnectTarget(target hikvisionBridgeTarg
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.ensureSDKLocked(); err != nil {
-		s.lastError = err.Error()
-		return err
+	if target.ProviderCode == "hikvision-isapi" {
+		s.closeISAPIStreamLocked(target.SessionKey)
+		if err := s.openISAPIStreamLocked(target); err != nil {
+			s.lastError = err.Error()
+			return err
+		}
+	} else {
+		if err := s.ensureSDKLocked(); err != nil {
+			s.lastError = err.Error()
+			return err
+		}
+		s.closeSessionLocked(target.SessionKey)
+		if err := s.openSessionLocked(target); err != nil {
+			s.lastError = err.Error()
+			return err
+		}
 	}
-	s.closeSessionLocked(target.SessionKey)
-	if err := s.openSessionLocked(target); err != nil {
-		s.lastError = err.Error()
-		return err
-	}
-	s.running = len(s.sessions) > 0
+	s.running = len(s.sessions) > 0 || len(s.isapiSessions) > 0
 	s.lastError = ""
 	if s.logger != nil {
-		s.logger.Info("hikvision sdk bridge target reconnected",
+		s.logger.Info("hikvision alarm bridge target reconnected",
+			zap.String("provider", target.ProviderCode),
 			zap.String("sessionKey", target.SessionKey),
 			zap.String("deviceType", target.DeviceType),
 			zap.Uint("deviceID", target.DeviceID),
@@ -214,7 +344,10 @@ func (s *HikvisionAlarmBridgeService) ReconnectTarget(target hikvisionBridgeTarg
 func (s *HikvisionAlarmBridgeService) HasSession(sessionKey string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.sessions[sessionKey]
+	if _, ok := s.sessions[sessionKey]; ok {
+		return true
+	}
+	_, ok := s.isapiSessions[sessionKey]
 	return ok
 }
 
@@ -241,7 +374,13 @@ func (s *HikvisionAlarmBridgeService) CloseDeviceSessions(deviceType string, dev
 			closed++
 		}
 	}
-	s.running = len(s.sessions) > 0
+	for sessionKey, session := range s.isapiSessions {
+		if session.DeviceType == deviceType && session.DeviceID == deviceID {
+			s.closeISAPIStreamLocked(sessionKey)
+			closed++
+		}
+	}
+	s.running = len(s.sessions) > 0 || len(s.isapiSessions) > 0
 	if s.logger != nil && closed > 0 {
 		s.logger.Info("hikvision sdk bridge device sessions closed",
 			zap.String("deviceType", deviceType),
@@ -260,14 +399,15 @@ func (s *HikvisionAlarmBridgeService) ResolveReconnectTargetsForDevice(deviceTyp
 
 	type bindingRow struct {
 		entity.SmartDeviceBinding
+		ProviderCode string `gorm:"column:provider_code"`
 	}
 	query := s.repo.DB().
 		Table("smart_device_binding AS b").
-		Select("b.*").
+		Select("b.*, p.provider_code").
 		Joins("JOIN smart_interface_provider p ON p.id = b.provider_id").
 		Joins("JOIN smart_interface_capability c ON c.id = b.capability_id").
-		Where("b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code = ? AND c.capability_code = ?",
-			true, true, true, "hikvision-sdk", "motion_detect")
+		Where("b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code IN ? AND c.capability_code = ?",
+			true, true, true, []string{"hikvision-sdk", "hikvision-isapi"}, "motion_detect")
 
 	switch deviceType {
 	case "camera":
@@ -291,7 +431,7 @@ func (s *HikvisionAlarmBridgeService) ResolveReconnectTargetsForDevice(deviceTyp
 
 	targetsBySession := make(map[string]*smartBridgeReconnectTarget)
 	for _, row := range rows {
-		target, ok, err := s.bindingToTarget(row.SmartDeviceBinding)
+		target, ok, err := s.bindingToTargetForProvider(row.ProviderCode, row.SmartDeviceBinding)
 		if err != nil {
 			return nil, err
 		}
@@ -321,15 +461,16 @@ func (s *HikvisionAlarmBridgeService) ResolveReconnectTargetForBinding(bindingID
 	}
 	type bindingRow struct {
 		entity.SmartDeviceBinding
+		ProviderCode string `gorm:"column:provider_code"`
 	}
 	var row bindingRow
 	err := s.repo.DB().
 		Table("smart_device_binding AS b").
-		Select("b.*").
+		Select("b.*, p.provider_code").
 		Joins("JOIN smart_interface_provider p ON p.id = b.provider_id").
 		Joins("JOIN smart_interface_capability c ON c.id = b.capability_id").
-		Where("b.id = ? AND b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code = ? AND c.capability_code = ?",
-			bindingID, true, true, true, "hikvision-sdk", "motion_detect").
+		Where("b.id = ? AND b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code IN ? AND c.capability_code = ?",
+			bindingID, true, true, true, []string{"hikvision-sdk", "hikvision-isapi"}, "motion_detect").
 		Scan(&row).Error
 	if err != nil {
 		return smartBridgeReconnectTarget{}, false, err
@@ -337,7 +478,7 @@ func (s *HikvisionAlarmBridgeService) ResolveReconnectTargetForBinding(bindingID
 	if row.ID == 0 {
 		return smartBridgeReconnectTarget{}, false, nil
 	}
-	target, ok, err := s.bindingToTarget(row.SmartDeviceBinding)
+	target, ok, err := s.bindingToTargetForProvider(row.ProviderCode, row.SmartDeviceBinding)
 	if err != nil || !ok {
 		return smartBridgeReconnectTarget{}, ok, err
 	}
@@ -356,6 +497,7 @@ func (s *HikvisionAlarmBridgeService) RuntimeStatus() map[string]any {
 	sessionItems := make([]map[string]any, 0, len(s.sessions))
 	for _, session := range s.sessions {
 		sessionItems = append(sessionItems, map[string]any{
+			"provider":   "hikvision-sdk",
 			"sessionKey": session.SessionKey,
 			"deviceType": session.DeviceType,
 			"deviceId":   session.DeviceID,
@@ -363,17 +505,54 @@ func (s *HikvisionAlarmBridgeService) RuntimeStatus() map[string]any {
 			"deviceIp":   session.DeviceIP,
 		})
 	}
+	for _, session := range s.isapiSessions {
+		lastEventAt := ""
+		if session.LastEventAt != nil {
+			lastEventAt = session.LastEventAt.Format(time.RFC3339)
+		}
+		lastByteAt := ""
+		if session.LastByteAt != nil {
+			lastByteAt = session.LastByteAt.Format(time.RFC3339)
+		}
+		sessionItems = append(sessionItems, map[string]any{
+			"provider":    "hikvision-isapi",
+			"sessionKey":  session.SessionKey,
+			"deviceType":  session.DeviceType,
+			"deviceId":    session.DeviceID,
+			"deviceName":  session.DeviceName,
+			"deviceIp":    session.DeviceIP,
+			"httpPort":    session.HTTPPort,
+			"connected":   session.Connected,
+			"lastError":   session.LastError,
+			"lastEventAt": lastEventAt,
+			"lastByteAt":  lastByteAt,
+		})
+	}
+	connectedISAPISessionCount := 0
+	receivingISAPISessionCount := 0
+	for _, session := range s.isapiSessions {
+		if session.Connected {
+			connectedISAPISessionCount++
+		}
+		if session.LastByteAt != nil {
+			receivingISAPISessionCount++
+		}
+	}
 	sort.Slice(sessionItems, func(i, j int) bool {
 		return fmt.Sprint(sessionItems[i]["sessionKey"]) < fmt.Sprint(sessionItems[j]["sessionKey"])
 	})
 	return map[string]any{
-		"running":             s.running,
-		"sessionCount":        len(s.sessions),
-		"bindingCount":        s.bindingCount,
-		"skippedBindingCount": s.skippedBindingCount,
-		"mergedBindingCount":  s.mergedBindingCount,
-		"lastError":           s.lastError,
-		"sessions":            sessionItems,
+		"running":                    s.running,
+		"sessionCount":               len(s.sessions) + len(s.isapiSessions),
+		"sdkSessionCount":            len(s.sessions),
+		"isapiSessionCount":          len(s.isapiSessions),
+		"isapiConnectedSessionCount": connectedISAPISessionCount,
+		"isapiReceivingSessionCount": receivingISAPISessionCount,
+		"bindingCount":               s.bindingCount,
+		"skippedBindingCount":        s.skippedBindingCount,
+		"mergedBindingCount":         s.mergedBindingCount,
+		"lastError":                  s.lastError,
+		"sessions":                   sessionItems,
 	}
 }
 
@@ -385,6 +564,9 @@ func (s *HikvisionAlarmBridgeService) IsRunning() bool {
 
 func (s *HikvisionAlarmBridgeService) stopLocked() {
 	s.flushAllMotionWindows()
+	for sessionKey := range s.isapiSessions {
+		s.closeISAPIStreamLocked(sessionKey)
+	}
 	for _, session := range s.sessions {
 		if s.sdk != nil {
 			if err := s.sdk.CloseAlarm(session.AlarmHandle); err != nil {
@@ -400,6 +582,7 @@ func (s *HikvisionAlarmBridgeService) stopLocked() {
 	}
 	s.sessions = make(map[string]*hikvisionBridgeSession)
 	s.sessionsByUserID = make(map[int32]*hikvisionBridgeSession)
+	s.isapiSessions = make(map[string]*hikvisionISAPIStreamSession)
 	s.motionCooldown = make(map[string]time.Time)
 	s.running = false
 }
@@ -437,7 +620,69 @@ func (s *HikvisionAlarmBridgeService) closeSessionLocked(sessionKey string) {
 	delete(s.sessions, sessionKey)
 }
 
-func (s *HikvisionAlarmBridgeService) collectTargets() ([]hikvisionBridgeTarget, error) {
+func (s *HikvisionAlarmBridgeService) closeISAPIStreamLocked(sessionKey string) {
+	session := s.isapiSessions[sessionKey]
+	if session == nil {
+		return
+	}
+	if session.cancel != nil {
+		session.cancel()
+	}
+	delete(s.isapiSessions, sessionKey)
+}
+
+func (s *HikvisionAlarmBridgeService) markISAPIStreamConnected(sessionKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if session := s.isapiSessions[sessionKey]; session != nil {
+		session.Connected = true
+		session.LastError = ""
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) markISAPIStreamError(sessionKey string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if session := s.isapiSessions[sessionKey]; session != nil {
+		session.Connected = false
+		if err != nil {
+			session.LastError = err.Error()
+		}
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) markISAPIStreamEvent(sessionKey string) {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if session := s.isapiSessions[sessionKey]; session != nil {
+		session.LastEventAt = &now
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) markISAPIStreamByte(sessionKey string) {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if session := s.isapiSessions[sessionKey]; session != nil {
+		session.LastByteAt = &now
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) isapiLastByteAt(sessionKey string) *time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if session := s.isapiSessions[sessionKey]; session != nil && session.LastByteAt != nil {
+		last := *session.LastByteAt
+		return &last
+	}
+	return nil
+}
+
+func (s *HikvisionAlarmBridgeService) collectTargets(providerCodes ...string) ([]hikvisionBridgeTarget, error) {
+	if len(providerCodes) == 0 {
+		providerCodes = []string{"hikvision-sdk"}
+	}
 	type bindingRow struct {
 		entity.SmartDeviceBinding
 		ProviderCode   string `gorm:"column:provider_code"`
@@ -449,9 +694,27 @@ func (s *HikvisionAlarmBridgeService) collectTargets() ([]hikvisionBridgeTarget,
 		Select("b.*, p.provider_code, c.capability_code").
 		Joins("JOIN smart_interface_provider p ON p.id = b.provider_id").
 		Joins("JOIN smart_interface_capability c ON c.id = b.capability_id").
-		Where("b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code = ? AND c.capability_code = ?", true, true, true, "hikvision-sdk", "motion_detect").
+		Where("b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code IN ? AND c.capability_code = ?", true, true, true, providerCodes, "motion_detect").
 		Scan(&rows).Error; err != nil {
 		return nil, err
+	}
+	if containsString(providerCodes, "hikvision-isapi") {
+		var isapiProvider entity.SmartInterfaceProvider
+		if err := s.repo.DB().Where("provider_code = ? AND enabled = ?", "hikvision-isapi", true).First(&isapiProvider).Error; err != nil && err != gorm.ErrRecordNotFound {
+			return nil, err
+		} else if err == nil {
+			var inheritedRows []bindingRow
+			if err := s.repo.DB().
+				Table("smart_device_binding AS b").
+				Select("b.*, ? AS provider_code, c.capability_code", "hikvision-isapi").
+				Joins("JOIN smart_interface_provider p ON p.id = b.provider_id").
+				Joins("JOIN smart_interface_capability c ON c.id = b.capability_id").
+				Where("b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code = ? AND c.capability_code = ?", true, true, true, "hikvision-sdk", "motion_detect").
+				Scan(&inheritedRows).Error; err != nil {
+				return nil, err
+			}
+			rows = append(rows, inheritedRows...)
+		}
 	}
 
 	targetMap := make(map[string]hikvisionBridgeTarget)
@@ -459,7 +722,7 @@ func (s *HikvisionAlarmBridgeService) collectTargets() ([]hikvisionBridgeTarget,
 	s.skippedBindingCount = 0
 	s.mergedBindingCount = 0
 	for _, row := range rows {
-		target, ok, err := s.bindingToTarget(row.SmartDeviceBinding)
+		target, ok, err := s.bindingToTargetForProvider(row.ProviderCode, row.SmartDeviceBinding)
 		if err != nil {
 			return nil, err
 		}
@@ -482,7 +745,15 @@ func (s *HikvisionAlarmBridgeService) collectTargets() ([]hikvisionBridgeTarget,
 }
 
 func (s *HikvisionAlarmBridgeService) bindingToTarget(binding entity.SmartDeviceBinding) (hikvisionBridgeTarget, bool, error) {
+	return s.bindingToTargetForProvider("hikvision-sdk", binding)
+}
+
+func (s *HikvisionAlarmBridgeService) bindingToTargetForProvider(providerCode string, binding entity.SmartDeviceBinding) (hikvisionBridgeTarget, bool, error) {
 	db := s.repo.DB()
+	providerCode = strings.TrimSpace(providerCode)
+	if providerCode == "" {
+		providerCode = "hikvision-sdk"
+	}
 	switch binding.SourceType {
 	case "recorder":
 		var recorder entity.RecorderDevice
@@ -497,14 +768,16 @@ func (s *HikvisionAlarmBridgeService) bindingToTarget(binding entity.SmartDevice
 			return hikvisionBridgeTarget{}, false, err
 		}
 		return hikvisionBridgeTarget{
-			SessionKey: fmt.Sprintf("recorder:%d", recorder.ID),
-			DeviceType: "recorder",
-			DeviceID:   recorder.ID,
-			DeviceName: recorder.Name,
-			DeviceIP:   recorder.IP,
-			SDKPort:    recorder.SDKPort,
-			Username:   recorder.Username,
-			Password:   password,
+			ProviderCode: providerCode,
+			SessionKey:   buildHikvisionTargetSessionKey(providerCode, "recorder", recorder.ID),
+			DeviceType:   "recorder",
+			DeviceID:     recorder.ID,
+			DeviceName:   recorder.Name,
+			DeviceIP:     recorder.IP,
+			SDKPort:      recorder.SDKPort,
+			HTTPPort:     recorder.HTTPPort,
+			Username:     recorder.Username,
+			Password:     password,
 		}, true, nil
 	case "channel":
 		var channel entity.RecorderChannel
@@ -523,14 +796,16 @@ func (s *HikvisionAlarmBridgeService) bindingToTarget(binding entity.SmartDevice
 			return hikvisionBridgeTarget{}, false, err
 		}
 		return hikvisionBridgeTarget{
-			SessionKey: fmt.Sprintf("recorder:%d", recorder.ID),
-			DeviceType: "recorder",
-			DeviceID:   recorder.ID,
-			DeviceName: recorder.Name,
-			DeviceIP:   recorder.IP,
-			SDKPort:    recorder.SDKPort,
-			Username:   recorder.Username,
-			Password:   password,
+			ProviderCode: providerCode,
+			SessionKey:   buildHikvisionTargetSessionKey(providerCode, "recorder", recorder.ID),
+			DeviceType:   "recorder",
+			DeviceID:     recorder.ID,
+			DeviceName:   recorder.Name,
+			DeviceIP:     recorder.IP,
+			SDKPort:      recorder.SDKPort,
+			HTTPPort:     recorder.HTTPPort,
+			Username:     recorder.Username,
+			Password:     password,
 		}, true, nil
 	case "camera":
 		var camera entity.CameraDevice
@@ -547,14 +822,16 @@ func (s *HikvisionAlarmBridgeService) bindingToTarget(binding entity.SmartDevice
 				password, decryptErr := util.ResolveDeviceSecret(s.deviceSecretKey(), recorder.PasswordEncrypted)
 				if decryptErr == nil {
 					return hikvisionBridgeTarget{
-						SessionKey: fmt.Sprintf("recorder:%d", recorder.ID),
-						DeviceType: "recorder",
-						DeviceID:   recorder.ID,
-						DeviceName: recorder.Name,
-						DeviceIP:   recorder.IP,
-						SDKPort:    recorder.SDKPort,
-						Username:   recorder.Username,
-						Password:   password,
+						ProviderCode: providerCode,
+						SessionKey:   buildHikvisionTargetSessionKey(providerCode, "recorder", recorder.ID),
+						DeviceType:   "recorder",
+						DeviceID:     recorder.ID,
+						DeviceName:   recorder.Name,
+						DeviceIP:     recorder.IP,
+						SDKPort:      recorder.SDKPort,
+						HTTPPort:     recorder.HTTPPort,
+						Username:     recorder.Username,
+						Password:     password,
 					}, true, nil
 				}
 			}
@@ -564,14 +841,16 @@ func (s *HikvisionAlarmBridgeService) bindingToTarget(binding entity.SmartDevice
 			return hikvisionBridgeTarget{}, false, err
 		}
 		return hikvisionBridgeTarget{
-			SessionKey: fmt.Sprintf("camera:%d", camera.ID),
-			DeviceType: "camera",
-			DeviceID:   camera.ID,
-			DeviceName: camera.Name,
-			DeviceIP:   camera.IP,
-			SDKPort:    camera.SDKPort,
-			Username:   camera.Username,
-			Password:   password,
+			ProviderCode: providerCode,
+			SessionKey:   buildHikvisionTargetSessionKey(providerCode, "camera", camera.ID),
+			DeviceType:   "camera",
+			DeviceID:     camera.ID,
+			DeviceName:   camera.Name,
+			DeviceIP:     camera.IP,
+			SDKPort:      camera.SDKPort,
+			HTTPPort:     camera.HTTPPort,
+			Username:     camera.Username,
+			Password:     password,
 		}, true, nil
 	default:
 		return hikvisionBridgeTarget{}, false, nil
@@ -624,6 +903,695 @@ func (s *HikvisionAlarmBridgeService) openSessionLocked(target hikvisionBridgeTa
 	return nil
 }
 
+func (s *HikvisionAlarmBridgeService) openISAPIStreamLocked(target hikvisionBridgeTarget) error {
+	if strings.TrimSpace(target.DeviceIP) == "" {
+		return fmt.Errorf("hikvision isapi device ip is empty")
+	}
+	httpPort := target.HTTPPort
+	if httpPort <= 0 {
+		httpPort = 80
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &hikvisionISAPIStreamSession{
+		SessionKey: target.SessionKey,
+		DeviceType: target.DeviceType,
+		DeviceID:   target.DeviceID,
+		DeviceName: target.DeviceName,
+		DeviceIP:   target.DeviceIP,
+		HTTPPort:   httpPort,
+		Username:   target.Username,
+		Password:   target.Password,
+		cancel:     cancel,
+	}
+	s.isapiSessions[session.SessionKey] = session
+	if s.logger != nil {
+		s.logger.Info("hikvision isapi alert stream starting",
+			zap.String("sessionKey", session.SessionKey),
+			zap.String("deviceType", session.DeviceType),
+			zap.Uint("deviceID", session.DeviceID),
+			zap.String("deviceIp", session.DeviceIP),
+			zap.Int("httpPort", session.HTTPPort),
+		)
+	}
+	go s.runISAPIAlertStream(ctx, session)
+	return nil
+}
+
+func (s *HikvisionAlarmBridgeService) runISAPIAlertStream(ctx context.Context, session *hikvisionISAPIStreamSession) {
+	backoff := 2 * time.Second
+	s.ensureISAPIHTTPCallback(ctx, session)
+	for {
+		if err := s.consumeISAPIAlertStream(ctx, session); err != nil && ctx.Err() == nil {
+			s.markISAPIStreamError(session.SessionKey, err)
+			if s.logger != nil {
+				s.logger.Warn("hikvision isapi alert stream interrupted",
+					zap.String("sessionKey", session.SessionKey),
+					zap.String("deviceIp", session.DeviceIP),
+					zap.Error(err),
+				)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) ensureISAPIHTTPCallback(ctx context.Context, session *hikvisionISAPIStreamSession) {
+	callbackURL, err := s.buildISAPICallbackURL(session.DeviceIP, session.HTTPPort)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("hikvision isapi callback url resolve failed",
+				zap.String("sessionKey", session.SessionKey),
+				zap.String("deviceIp", session.DeviceIP),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+	if err := configureHikvisionISAPIHTTPHost(ctx, session, callbackURL); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("hikvision isapi http callback configure failed",
+				zap.String("sessionKey", session.SessionKey),
+				zap.String("deviceIp", session.DeviceIP),
+				zap.String("callbackUrl", callbackURL),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+	if s.logger != nil {
+		s.logger.Info("hikvision isapi http callback configured",
+			zap.String("sessionKey", session.SessionKey),
+			zap.String("deviceIp", session.DeviceIP),
+			zap.String("callbackUrl", callbackURL),
+		)
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) consumeISAPIAlertStream(ctx context.Context, session *hikvisionISAPIStreamSession) error {
+	streamURL := buildHikvisionISAPIAlertStreamURL(session.DeviceIP, session.HTTPPort)
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	response, err := doHikvisionISAPIStreamRequest(streamCtx, streamURL, session.Username, session.Password)
+	if err != nil {
+		return err
+	}
+	body := newIdleReadCloser(response.Body, hikvisionISAPIStreamIdleTimeout, func() {
+		if s.logger != nil {
+			s.logger.Warn("hikvision isapi alert stream idle timeout",
+				zap.String("sessionKey", session.SessionKey),
+				zap.String("deviceIp", session.DeviceIP),
+				zap.Duration("idleTimeout", hikvisionISAPIStreamIdleTimeout),
+			)
+		}
+		cancel()
+	})
+	defer body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("hikvision isapi alert stream status %d", response.StatusCode)
+	}
+	if s.logger != nil {
+		s.logger.Info("hikvision isapi alert stream connected",
+			zap.String("sessionKey", session.SessionKey),
+			zap.String("deviceIp", session.DeviceIP),
+			zap.Int("httpPort", session.HTTPPort),
+			zap.String("contentType", response.Header.Get("Content-Type")),
+			zap.Duration("idleTimeout", hikvisionISAPIStreamIdleTimeout),
+		)
+	}
+	s.markISAPIStreamConnected(session.SessionKey)
+	connectedAt := time.Now()
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go s.watchISAPIStreamIdle(streamCtx, watchDone, session, connectedAt, cancel, body.Close)
+	contentType := response.Header.Get("Content-Type")
+	if strings.HasPrefix(strings.ToLower(contentType), "multipart/") {
+		return s.consumeISAPIMultipartStream(streamCtx, session, body, contentType)
+	}
+	return s.consumeISAPITextStream(streamCtx, session, body)
+}
+
+func (s *HikvisionAlarmBridgeService) watchISAPIStreamIdle(ctx context.Context, done <-chan struct{}, session *hikvisionISAPIStreamSession, connectedAt time.Time, cancel context.CancelFunc, closeBody func() error) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			reference := connectedAt
+			if lastByteAt := s.isapiLastByteAt(session.SessionKey); lastByteAt != nil {
+				reference = *lastByteAt
+			}
+			idleFor := time.Since(reference)
+			if idleFor < hikvisionISAPIStreamIdleTimeout {
+				continue
+			}
+			if s.logger != nil {
+				s.logger.Warn("hikvision isapi alert stream idle timeout",
+					zap.String("sessionKey", session.SessionKey),
+					zap.String("deviceIp", session.DeviceIP),
+					zap.Duration("idleFor", idleFor),
+					zap.Duration("idleTimeout", hikvisionISAPIStreamIdleTimeout),
+				)
+			}
+			cancel()
+			if closeBody != nil {
+				_ = closeBody()
+			}
+			return
+		}
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) consumeISAPIMultipartStream(ctx context.Context, session *hikvisionISAPIStreamSession, body io.Reader, contentType string) error {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return err
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return fmt.Errorf("hikvision isapi multipart boundary is empty")
+	}
+	reader := multipart.NewReader(body, boundary)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(part, 20<<20))
+		if closeErr := part.Close(); readErr == nil {
+			readErr = closeErr
+		}
+		if readErr != nil {
+			return readErr
+		}
+		s.markISAPIStreamByte(session.SessionKey)
+		partType := part.Header.Get("Content-Type")
+		payload := buildISAPIStreamPartPayload(data, part.FileName(), partType)
+		if payload == nil {
+			continue
+		}
+		s.markISAPIStreamEvent(session.SessionKey)
+		if s.logger != nil {
+			s.logger.Info("hikvision isapi alert stream part received",
+				zap.String("sessionKey", session.SessionKey),
+				zap.String("contentType", partType),
+				zap.String("filename", part.FileName()),
+				zap.Int("size", len(data)),
+			)
+		}
+		headers := map[string]string{
+			"X-Request-Client-IP": session.DeviceIP,
+			"X-Hikvision-Session": session.SessionKey,
+			"Content-Type":        partType,
+		}
+		result, err := s.IngestISAPIMotionEvent("hikvision-isapi", payload, headers)
+		if err != nil {
+			s.logger.Error("hikvision isapi stream event ingest failed",
+				zap.String("sessionKey", session.SessionKey),
+				zap.Error(err),
+			)
+		} else if s.logger != nil {
+			s.logger.Info("hikvision isapi stream event ingest result",
+				zap.String("sessionKey", session.SessionKey),
+				zap.Any("result", result),
+			)
+		}
+	}
+}
+
+func (s *HikvisionAlarmBridgeService) consumeISAPITextStream(ctx context.Context, session *hikvisionISAPIStreamSession, body io.Reader) error {
+	reader := bufio.NewReader(body)
+	var buffer strings.Builder
+	chunk := make([]byte, 4096)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		n, err := reader.Read(chunk)
+		if n > 0 {
+			s.markISAPIStreamByte(session.SessionKey)
+			buffer.Write(chunk[:n])
+			for {
+				payload, ok := nextISAPITextPayload(&buffer)
+				if !ok {
+					break
+				}
+				s.ingestISAPIStreamPayload(session, payload, "application/xml")
+			}
+			if buffer.Len() > 4*1024*1024 {
+				return fmt.Errorf("hikvision isapi text stream buffer exceeded 4MB without complete event")
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+func nextISAPITextPayload(buffer *strings.Builder) (string, bool) {
+	text := buffer.String()
+	lower := strings.ToLower(text)
+	endTag := "</eventnotificationalert>"
+	endIndex := strings.Index(lower, endTag)
+	if endIndex < 0 {
+		return "", false
+	}
+	eventEnd := endIndex + len(endTag)
+	startIndex := strings.LastIndex(strings.ToLower(text[:eventEnd]), "<eventnotificationalert")
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	payload := strings.TrimSpace(text[startIndex:eventEnd])
+	remaining := text[eventEnd:]
+	buffer.Reset()
+	buffer.WriteString(remaining)
+	return payload, payload != ""
+}
+
+func (s *HikvisionAlarmBridgeService) ingestISAPIStreamPayload(session *hikvisionISAPIStreamSession, payload string, contentType string) {
+	s.markISAPIStreamEvent(session.SessionKey)
+	if s.logger != nil {
+		s.logger.Info("hikvision isapi alert stream payload received",
+			zap.String("sessionKey", session.SessionKey),
+			zap.String("contentType", contentType),
+			zap.Int("size", len(payload)),
+			zap.String("preview", truncateText(payload, 300)),
+		)
+	}
+	headers := map[string]string{
+		"X-Request-Client-IP": session.DeviceIP,
+		"X-Hikvision-Session": session.SessionKey,
+		"Content-Type":        contentType,
+	}
+	result, err := s.IngestISAPIMotionEvent("hikvision-isapi", payload, headers)
+	if err != nil {
+		s.logger.Error("hikvision isapi stream event ingest failed",
+			zap.String("sessionKey", session.SessionKey),
+			zap.Error(err),
+		)
+	} else if s.logger != nil {
+		s.logger.Info("hikvision isapi stream event ingest result",
+			zap.String("sessionKey", session.SessionKey),
+			zap.Any("result", result),
+		)
+	}
+}
+
+func buildHikvisionTargetSessionKey(providerCode, deviceType string, deviceID uint) string {
+	base := fmt.Sprintf("%s:%d", deviceType, deviceID)
+	if providerCode == "hikvision-isapi" {
+		return "isapi-" + base
+	}
+	return base
+}
+
+func buildHikvisionISAPIAlertStreamURL(deviceIP string, httpPort int) string {
+	if httpPort <= 0 {
+		httpPort = 80
+	}
+	scheme := "http"
+	if httpPort == 443 {
+		scheme = "https"
+	}
+	return (&url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(deviceIP, strconv.Itoa(httpPort)),
+		Path:   "/ISAPI/Event/notification/alertStream",
+	}).String()
+}
+
+func (s *HikvisionAlarmBridgeService) buildISAPICallbackURL(deviceIP string, httpPort int) (string, error) {
+	base := strings.TrimSpace(s.cfg.BackendPublicBaseURL)
+	if base != "" {
+		if parsed, err := url.Parse(base); err == nil {
+			host := parsed.Hostname()
+			if host != "" && host != "127.0.0.1" && host != "localhost" && host != "::1" {
+				parsed.Path = "/smart/events/ingest/hikvision-isapi"
+				parsed.RawQuery = ""
+				parsed.Fragment = ""
+				return parsed.String(), nil
+			}
+		}
+	}
+	localIP, err := localOutboundIP(deviceIP, httpPort)
+	if err != nil {
+		return "", err
+	}
+	port := s.cfg.HTTPPort
+	if port <= 0 {
+		port = 8000
+	}
+	return (&url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(localIP, strconv.Itoa(port)),
+		Path:   "/smart/events/ingest/hikvision-isapi",
+	}).String(), nil
+}
+
+func localOutboundIP(remoteIP string, remotePort int) (string, error) {
+	if remotePort <= 0 {
+		remotePort = 80
+	}
+	conn, err := net.DialTimeout("udp", net.JoinHostPort(remoteIP, strconv.Itoa(remotePort)), 3*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok && localAddr.IP != nil {
+		return localAddr.IP.String(), nil
+	}
+	return "", fmt.Errorf("resolve local outbound ip failed")
+}
+
+func configureHikvisionISAPIHTTPHost(ctx context.Context, session *hikvisionISAPIStreamSession, callbackURL string) error {
+	parsed, err := url.Parse(callbackURL)
+	if err != nil {
+		return err
+	}
+	host := parsed.Hostname()
+	port := parsed.Port()
+	if port == "" {
+		switch parsed.Scheme {
+		case "https":
+			port = "443"
+		default:
+			port = "80"
+		}
+	}
+	path := parsed.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if parsed.RawQuery != "" {
+		path += "?" + parsed.RawQuery
+	}
+	addressingType := "hostname"
+	addressTag := fmt.Sprintf("<hostName>%s</hostName>", xmlEscape(host))
+	if ip := net.ParseIP(host); ip != nil {
+		addressingType = "ipaddress"
+		addressTag = fmt.Sprintf("<ipAddress>%s</ipAddress>", xmlEscape(host))
+	}
+	payload := []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<HttpHostNotification version="1.0" xmlns="urn:psialliance-org">
+<id>1</id>
+<url>%s</url>
+<protocolType>%s</protocolType>
+<parameterFormatType>XML</parameterFormatType>
+<addressingFormatType>%s</addressingFormatType>
+%s
+<portNo>%s</portNo>
+<httpAuthenticationMethod>none</httpAuthenticationMethod>
+<Extensions xmlns="http://www.hikvision.com/ver20/XMLSchema">
+<intervalBetweenEvents>0</intervalBetweenEvents>
+</Extensions>
+</HttpHostNotification>`,
+		xmlEscape(path),
+		strings.ToUpper(firstNonEmpty(parsed.Scheme, "http")),
+		addressingType,
+		addressTag,
+		xmlEscape(port),
+	))
+	targetURL := buildHikvisionISAPIHTTPHostURL(session.DeviceIP, session.HTTPPort, 1)
+	return doHikvisionISAPIPutXML(ctx, targetURL, session.Username, session.Password, payload)
+}
+
+func buildHikvisionISAPIHTTPHostURL(deviceIP string, httpPort int, hostID int) string {
+	if httpPort <= 0 {
+		httpPort = 80
+	}
+	scheme := "http"
+	if httpPort == 443 {
+		scheme = "https"
+	}
+	return (&url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(deviceIP, strconv.Itoa(httpPort)),
+		Path:   fmt.Sprintf("/ISAPI/Event/notification/httpHosts/%d", hostID),
+	}).String()
+}
+
+func xmlEscape(value string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&apos;",
+	)
+	return replacer.Replace(value)
+}
+
+func buildISAPIStreamPartPayload(data []byte, filename, contentType string) any {
+	if len(data) == 0 {
+		return nil
+	}
+	normalizedType := strings.ToLower(contentType)
+	if strings.HasPrefix(normalizedType, "image/") || looksLikeJPEG(data) {
+		return map[string]any{
+			"files": []SmartIngestFile{{
+				Filename:    filename,
+				ContentType: contentType,
+				Data:        data,
+			}},
+		}
+	}
+	text := string(data)
+	return map[string]any{
+		"fields": map[string][]string{"body": {text}},
+	}
+}
+
+func doHikvisionISAPIStreamRequest(ctx context.Context, streamURL, username, password string) (*http.Response, error) {
+	client := &http.Client{}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, streamURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	setHikvisionISAPIStreamHeaders(request)
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != http.StatusUnauthorized {
+		return response, nil
+	}
+	challenge := response.Header.Get("WWW-Authenticate")
+	_ = response.Body.Close()
+	authHeader, err := buildHikvisionAuthHeader(http.MethodGet, request.URL.RequestURI(), challenge, username, password)
+	if err != nil {
+		return nil, err
+	}
+	request, err = http.NewRequestWithContext(ctx, http.MethodGet, streamURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	setHikvisionISAPIStreamHeaders(request)
+	request.Header.Set("Authorization", authHeader)
+	return client.Do(request)
+}
+
+func doHikvisionISAPIPutXML(ctx context.Context, targetURL, username, password string, payload []byte) error {
+	client := &http.Client{Timeout: 8 * time.Second}
+	body, statusCode, challenge, err := doHikvisionISAPIPutXMLOnce(ctx, client, targetURL, username, password, payload, "")
+	if err == nil && statusCode >= 200 && statusCode < 300 {
+		return nil
+	}
+	if statusCode != http.StatusUnauthorized {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("PUT %s returned status %d: %s", targetURL, statusCode, truncateText(string(body), 300))
+	}
+	authHeader, err := buildHikvisionAuthHeader(http.MethodPut, mustRequestURI(targetURL), challenge, username, password)
+	if err != nil {
+		return err
+	}
+	body, statusCode, _, err = doHikvisionISAPIPutXMLOnce(ctx, client, targetURL, username, password, payload, authHeader)
+	if err != nil {
+		return err
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		return fmt.Errorf("PUT %s returned status %d: %s", targetURL, statusCode, truncateText(string(body), 300))
+	}
+	return nil
+}
+
+func doHikvisionISAPIPutXMLOnce(ctx context.Context, client *http.Client, targetURL, username, password string, payload []byte, authorization string) ([]byte, int, string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, targetURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return nil, 0, "", err
+	}
+	request.Header.Set("Content-Type", "application/xml")
+	request.Header.Set("Accept", "application/xml, text/xml, */*")
+	if authorization != "" {
+		request.Header.Set("Authorization", authorization)
+	} else if username != "" || password != "" {
+		request.SetBasicAuth(username, password)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	defer response.Body.Close()
+	body, readErr := io.ReadAll(response.Body)
+	return body, response.StatusCode, response.Header.Get("WWW-Authenticate"), readErr
+}
+
+func mustRequestURI(targetURL string) string {
+	parsed, err := url.Parse(targetURL)
+	if err != nil {
+		return targetURL
+	}
+	return parsed.RequestURI()
+}
+
+func setHikvisionISAPIStreamHeaders(request *http.Request) {
+	request.Header.Set("Accept", "multipart/x-mixed-replace, application/xml, text/xml, application/json, */*")
+	request.Header.Set("Cache-Control", "no-cache")
+	request.Header.Set("Connection", "keep-alive")
+	request.Header.Set("User-Agent", "SecmgmtV2-Hikvision-ISAPI/1.0")
+}
+
+func buildHikvisionAuthHeader(method, uri, challenge, username, password string) (string, error) {
+	challenge = strings.TrimSpace(challenge)
+	if strings.HasPrefix(strings.ToLower(challenge), "basic") {
+		token := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		return "Basic " + token, nil
+	}
+	if !strings.HasPrefix(strings.ToLower(challenge), "digest") {
+		return "", fmt.Errorf("unsupported hikvision auth challenge: %s", challenge)
+	}
+	params := parseHikvisionDigestChallenge(strings.TrimSpace(challenge[len("Digest"):]))
+	realm := params["realm"]
+	nonce := params["nonce"]
+	if realm == "" || nonce == "" {
+		return "", fmt.Errorf("invalid hikvision digest challenge")
+	}
+	qop := firstDigestQOP(params["qop"])
+	algorithm := strings.ToUpper(firstNonEmpty(params["algorithm"], "MD5"))
+	if algorithm != "MD5" {
+		return "", fmt.Errorf("unsupported hikvision digest algorithm: %s", algorithm)
+	}
+	cnonce := randomHex(8)
+	nc := "00000001"
+	ha1 := hikvisionMD5Hex(username + ":" + realm + ":" + password)
+	ha2 := hikvisionMD5Hex(method + ":" + uri)
+	response := ""
+	if qop != "" {
+		response = hikvisionMD5Hex(strings.Join([]string{ha1, nonce, nc, cnonce, qop, ha2}, ":"))
+	} else {
+		response = hikvisionMD5Hex(strings.Join([]string{ha1, nonce, ha2}, ":"))
+	}
+	parts := []string{
+		fmt.Sprintf(`username="%s"`, username),
+		fmt.Sprintf(`realm="%s"`, realm),
+		fmt.Sprintf(`nonce="%s"`, nonce),
+		fmt.Sprintf(`uri="%s"`, uri),
+		fmt.Sprintf(`response="%s"`, response),
+	}
+	if params["opaque"] != "" {
+		parts = append(parts, fmt.Sprintf(`opaque="%s"`, params["opaque"]))
+	}
+	if qop != "" {
+		parts = append(parts,
+			fmt.Sprintf(`qop=%s`, qop),
+			fmt.Sprintf(`nc=%s`, nc),
+			fmt.Sprintf(`cnonce="%s"`, cnonce),
+		)
+	}
+	return "Digest " + strings.Join(parts, ", "), nil
+}
+
+func parseHikvisionDigestChallenge(value string) map[string]string {
+	result := make(map[string]string)
+	for _, part := range splitAuthHeader(value) {
+		key, rawValue, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		rawValue = strings.TrimSpace(rawValue)
+		rawValue = strings.Trim(rawValue, `"`)
+		result[key] = rawValue
+	}
+	return result
+}
+
+func splitAuthHeader(value string) []string {
+	parts := make([]string, 0)
+	var builder strings.Builder
+	inQuote := false
+	for _, item := range value {
+		switch item {
+		case '"':
+			inQuote = !inQuote
+			builder.WriteRune(item)
+		case ',':
+			if inQuote {
+				builder.WriteRune(item)
+			} else if strings.TrimSpace(builder.String()) != "" {
+				parts = append(parts, strings.TrimSpace(builder.String()))
+				builder.Reset()
+			}
+		default:
+			builder.WriteRune(item)
+		}
+	}
+	if strings.TrimSpace(builder.String()) != "" {
+		parts = append(parts, strings.TrimSpace(builder.String()))
+	}
+	return parts
+}
+
+func firstDigestQOP(value string) string {
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "auth" {
+			return item
+		}
+	}
+	return ""
+}
+
+func hikvisionMD5Hex(value string) string {
+	sum := md5.Sum([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func randomHex(size int) string {
+	if size <= 0 {
+		size = 8
+	}
+	data := make([]byte, size)
+	if _, err := rand.Read(data); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(data)
+}
+
 func (s *HikvisionAlarmBridgeService) handleAlarm(alarm hikvision.MotionAlarm) {
 	s.mu.RLock()
 	session := s.sessionsByUserID[alarm.UserID]
@@ -635,6 +1603,9 @@ func (s *HikvisionAlarmBridgeService) handleAlarm(alarm hikvision.MotionAlarm) {
 	for _, rawChannelNo := range alarm.Channels {
 		channelNo := hikvision.NormalizeAlarmChannelNo(session.DeviceInfo, rawChannelNo)
 		if err := s.persistMotionEventForProvider("hikvision-sdk", session, alarm.DeviceIP, rawChannelNo, channelNo, int(alarm.Command), alarm.ImageData, alarm.ImageType); err != nil {
+			if errors.Is(err, errHikvisionMotionBindingNotMatched) {
+				continue
+			}
 			s.logger.Error("persist hikvision motion event failed",
 				zap.String("sessionKey", session.SessionKey),
 				zap.Int("channelNo", channelNo),
@@ -647,6 +1618,11 @@ func (s *HikvisionAlarmBridgeService) handleAlarm(alarm hikvision.MotionAlarm) {
 func (s *HikvisionAlarmBridgeService) IngestISAPIMotionEvent(providerCode string, payload any, headers map[string]string) (map[string]any, error) {
 	event, ok := parseHikvisionISAPIMotionPayload(payload, headers)
 	if !ok {
+		s.logger.Warn("hikvision isapi event ignored",
+			zap.String("reason", "not a hikvision motion event"),
+			zap.Any("headers", headers),
+			zap.Any("payloadSummary", summarizeISAPIPayload(payload)),
+		)
 		return map[string]any{"accepted": false, "reason": "not a hikvision motion event"}, nil
 	}
 	session, ok, err := s.resolveISAPISession(event.DeviceIP, event.ChannelNo)
@@ -654,12 +1630,35 @@ func (s *HikvisionAlarmBridgeService) IngestISAPIMotionEvent(providerCode string
 		return nil, err
 	}
 	if !ok {
+		s.logger.Warn("hikvision isapi event ignored",
+			zap.String("reason", "device or channel not matched"),
+			zap.String("deviceIp", event.DeviceIP),
+			zap.Int("channelNo", event.ChannelNo),
+			zap.Any("headers", headers),
+			zap.Any("payloadSummary", summarizeISAPIPayload(payload)),
+		)
 		return map[string]any{"accepted": false, "reason": "device or channel not matched"}, nil
 	}
 	if event.RawChannelNo <= 0 {
 		event.RawChannelNo = event.ChannelNo
 	}
 	if err := s.persistMotionEventForProvider(providerCode, session, event.DeviceIP, event.RawChannelNo, event.ChannelNo, 0x6009, event.ImageData, event.ImageType); err != nil {
+		if errors.Is(err, errHikvisionMotionBindingNotMatched) {
+			s.logger.Warn("hikvision isapi event ignored",
+				zap.String("reason", "smart binding not matched"),
+				zap.String("provider", providerCode),
+				zap.String("deviceIp", event.DeviceIP),
+				zap.Int("channelNo", event.ChannelNo),
+				zap.String("sessionKey", session.SessionKey),
+			)
+			return map[string]any{
+				"accepted":  false,
+				"reason":    "smart binding not matched",
+				"provider":  providerCode,
+				"deviceIp":  event.DeviceIP,
+				"channelNo": event.ChannelNo,
+			}, nil
+		}
 		return nil, err
 	}
 	return map[string]any{
@@ -733,6 +1732,7 @@ func flattenPayloadValues(payload any) []flattenedPayloadValue {
 			for key, list := range item {
 				for _, child := range list {
 					values = append(values, flattenedPayloadValue{Key: key, Value: child})
+					values = append(values, extractStructuredTextValues(child)...)
 				}
 			}
 		case []any:
@@ -742,14 +1742,15 @@ func flattenPayloadValues(payload any) []flattenedPayloadValue {
 		case []string:
 			for _, child := range item {
 				values = append(values, flattenedPayloadValue{Key: prefix, Value: child})
+				values = append(values, extractStructuredTextValues(child)...)
 			}
 		case string:
 			values = append(values, flattenedPayloadValue{Key: prefix, Value: item})
-			values = append(values, extractXMLValues(item)...)
+			values = append(values, extractStructuredTextValues(item)...)
 		case []byte:
 			text := string(item)
 			values = append(values, flattenedPayloadValue{Key: prefix, Value: text})
-			values = append(values, extractXMLValues(text)...)
+			values = append(values, extractStructuredTextValues(text)...)
 		case float64:
 			values = append(values, flattenedPayloadValue{Key: prefix, Value: fmt.Sprintf("%.0f", item)})
 		case int:
@@ -766,6 +1767,12 @@ func flattenPayloadValues(payload any) []flattenedPayloadValue {
 	return values
 }
 
+func extractStructuredTextValues(text string) []flattenedPayloadValue {
+	values := extractXMLValues(text)
+	values = append(values, extractJSONValues(text)...)
+	return values
+}
+
 func extractXMLValues(text string) []flattenedPayloadValue {
 	result := make([]flattenedPayloadValue, 0)
 	matches := regexpXMLTag.FindAllStringSubmatch(text, -1)
@@ -774,6 +1781,46 @@ func extractXMLValues(text string) []flattenedPayloadValue {
 			result = append(result, flattenedPayloadValue{Key: match[1], Value: strings.TrimSpace(match[2])})
 		}
 	}
+	return result
+}
+
+func extractJSONValues(text string) []flattenedPayloadValue {
+	text = strings.TrimSpace(text)
+	if text == "" || (!strings.HasPrefix(text, "{") && !strings.HasPrefix(text, "[")) {
+		return nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	var parsed any
+	if err := decoder.Decode(&parsed); err != nil {
+		return nil
+	}
+	result := make([]flattenedPayloadValue, 0)
+	var walk func(prefix string, value any)
+	walk = func(prefix string, value any) {
+		switch item := value.(type) {
+		case map[string]any:
+			for key, child := range item {
+				walk(key, child)
+			}
+		case []any:
+			for _, child := range item {
+				walk(prefix, child)
+			}
+		case string:
+			result = append(result, flattenedPayloadValue{Key: prefix, Value: item})
+		case json.Number:
+			result = append(result, flattenedPayloadValue{Key: prefix, Value: item.String()})
+		case float64:
+			result = append(result, flattenedPayloadValue{Key: prefix, Value: fmt.Sprintf("%.0f", item)})
+		case bool:
+			result = append(result, flattenedPayloadValue{Key: prefix, Value: fmt.Sprintf("%t", item)})
+		case nil:
+		default:
+			result = append(result, flattenedPayloadValue{Key: prefix, Value: fmt.Sprint(item)})
+		}
+	}
+	walk("", parsed)
 	return result
 }
 
@@ -786,6 +1833,13 @@ func payloadText(payload any) string {
 	case map[string]any:
 		if body, ok := item["body"].(string); ok {
 			return body
+		}
+		if fields, ok := item["fields"].(map[string][]string); ok {
+			for _, key := range []string{"body", "event", "EventNotificationAlert", "xml"} {
+				if values := fields[key]; len(values) > 0 {
+					return strings.Join(values, "\n")
+				}
+			}
 		}
 	}
 	return ""
@@ -901,6 +1955,8 @@ func isHikvisionMotionEventText(value string) bool {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", ""))
 	normalized = strings.ReplaceAll(normalized, "-", "")
 	switch {
+	case strings.Contains(value, "移动侦测"):
+		return true
 	case strings.Contains(normalized, "vmd"):
 		return true
 	case strings.Contains(normalized, "motion"):
@@ -912,6 +1968,60 @@ func isHikvisionMotionEventText(value string) bool {
 	default:
 		return false
 	}
+}
+
+func summarizeISAPIPayload(payload any) any {
+	switch item := payload.(type) {
+	case string:
+		return truncateText(item, 1000)
+	case []byte:
+		return map[string]any{
+			"type": "bytes",
+			"size": len(item),
+			"text": truncateText(string(item), 1000),
+		}
+	case map[string]any:
+		summary := make(map[string]any, len(item))
+		for key, value := range item {
+			switch typed := value.(type) {
+			case []SmartIngestFile:
+				files := make([]map[string]any, 0, len(typed))
+				for _, file := range typed {
+					files = append(files, map[string]any{
+						"filename":    file.Filename,
+						"contentType": file.ContentType,
+						"size":        len(file.Data),
+					})
+				}
+				summary[key] = files
+			case map[string][]string:
+				fields := make(map[string][]string, len(typed))
+				for fieldKey, values := range typed {
+					copied := make([]string, 0, len(values))
+					for _, value := range values {
+						copied = append(copied, truncateText(value, 1000))
+					}
+					fields[fieldKey] = copied
+				}
+				summary[key] = fields
+			case string:
+				summary[key] = truncateText(typed, 1000)
+			default:
+				summary[key] = typed
+			}
+		}
+		return summary
+	default:
+		return truncateText(fmt.Sprintf("%v", payload), 1000)
+	}
+}
+
+func truncateText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "...(truncated)"
 }
 
 func (s *HikvisionAlarmBridgeService) resolveISAPISession(deviceIP string, channelNo int) (*hikvisionBridgeSession, bool, error) {
@@ -1105,7 +2215,7 @@ func (s *HikvisionAlarmBridgeService) buildMotionAggregateWindow(
 			return err
 		}
 		if provider == nil || capability == nil || binding == nil {
-			return nil
+			return errHikvisionMotionBindingNotMatched
 		}
 
 		eventLevel := "medium"
@@ -1337,8 +2447,8 @@ func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
 	rawChannelNo int,
 	channelNo int,
 	command int,
-	alarmImage []byte,
-	alarmImageType byte,
+	_ []byte,
+	_ byte,
 ) error {
 	eventTime := time.Now()
 	unlockPersist := s.lockAlarmDedupKey(fmt.Sprintf("motion-persist:%s:%d", session.SessionKey, channelNo))
@@ -1390,12 +2500,11 @@ func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
 			return err
 		}
 		if provider == nil || capability == nil || binding == nil {
-			return nil
+			return errHikvisionMotionBindingNotMatched
 		}
 		snapshotURL := ""
-		if len(alarmImage) > 0 && shouldCaptureMotionSnapshot(rule, entity.SmartEvent{}) {
-			snapshotEntityID := resolveSnapshotEntityID(camera, channel, recorder, session.DeviceID)
-			snapshotURL = s.saveAlarmPacketImage(session, snapshotEntityID, eventTime, alarmImage, alarmImageType)
+		if shouldCaptureMotionSnapshot(rule, entity.SmartEvent{}) {
+			snapshotURL = s.captureMotionSnapshot(session, camera, recorder, channel, eventTime, channelNo)
 		}
 		payload := map[string]any{
 			"capabilityCode": "motion_detect",
@@ -1416,7 +2525,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
 			"imageUrl":       nullableStringValue(snapshotURL),
 		}
 		if snapshotURL != "" {
-			payload["imageSource"] = "sdk-alarm-package"
+			payload["imageSource"] = "snapshot-api"
 		}
 		rawEventID := fmt.Sprintf("hikvision-motion:%s:%d:%d:%s", binding.SourceType, binding.SourceID, channelNo, uuid.NewString()[:12])
 		headers := map[string]string{"x-hikvision-bridge": providerCode}
@@ -1613,32 +2722,58 @@ func (s *HikvisionAlarmBridgeService) matchMotionBindingForProvider(
 		{sourceType: "camera", sourceID: entityID(camera)},
 		{sourceType: "recorder", sourceID: entityID(recorder)},
 	}
-	for _, candidate := range candidates {
-		if candidate.sourceID == 0 {
-			continue
+	findBinding := func(providerID uint) (*entity.SmartDeviceBinding, *entity.SmartBindingRule, error) {
+		for _, candidate := range candidates {
+			if candidate.sourceID == 0 {
+				continue
+			}
+			binding := &entity.SmartDeviceBinding{}
+			err := tx.Where(
+				"provider_id = ? AND capability_id = ? AND source_type = ? AND source_id = ? AND enabled = ?",
+				providerID, capability.ID, candidate.sourceType, candidate.sourceID, true,
+			).Order("priority DESC, id ASC").First(binding).Error
+			if err == gorm.ErrRecordNotFound {
+				continue
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			var rule entity.SmartBindingRule
+			err = tx.Where("binding_id = ? AND enabled = ?", binding.ID, true).
+				Order("generate_alarm_directly DESC, alarm_enabled DESC, id ASC").
+				First(&rule).Error
+			if err == gorm.ErrRecordNotFound {
+				return binding, nil, nil
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			return binding, &rule, nil
 		}
-		binding := &entity.SmartDeviceBinding{}
-		err := tx.Where(
-			"provider_id = ? AND capability_id = ? AND source_type = ? AND source_id = ? AND enabled = ?",
-			provider.ID, capability.ID, candidate.sourceType, candidate.sourceID, true,
-		).Order("priority DESC, id ASC").First(binding).Error
-		if err == gorm.ErrRecordNotFound {
-			continue
-		}
-		if err != nil {
+		return nil, nil, nil
+	}
+	binding, rule, err := findBinding(provider.ID)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if binding != nil {
+		return provider, capability, binding, rule, nil
+	}
+	if providerCode == "hikvision-isapi" {
+		var sdkProvider entity.SmartInterfaceProvider
+		err := tx.Where("provider_code = ? AND enabled = ?", "hikvision-sdk", true).First(&sdkProvider).Error
+		if err != nil && err != gorm.ErrRecordNotFound {
 			return nil, nil, nil, nil, err
 		}
-		var rule entity.SmartBindingRule
-		err = tx.Where("binding_id = ? AND enabled = ?", binding.ID, true).
-			Order("generate_alarm_directly DESC, alarm_enabled DESC, id ASC").
-			First(&rule).Error
-		if err == gorm.ErrRecordNotFound {
-			return provider, capability, binding, nil, nil
+		if err == nil {
+			binding, rule, err = findBinding(sdkProvider.ID)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			if binding != nil {
+				return provider, capability, binding, rule, nil
+			}
 		}
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		return provider, capability, binding, &rule, nil
 	}
 	return provider, capability, nil, nil, nil
 }
@@ -1780,6 +2915,146 @@ func (s *HikvisionAlarmBridgeService) captureSnapshot(session *hikvisionBridgeSe
 		return ""
 	}
 	return s.buildSnapshotURL(snapshotPath)
+}
+
+func (s *HikvisionAlarmBridgeService) captureMotionSnapshot(
+	session *hikvisionBridgeSession,
+	camera *entity.CameraDevice,
+	recorder *entity.RecorderDevice,
+	channel *entity.RecorderChannel,
+	eventTime time.Time,
+	channelNo int,
+) string {
+	snapshotEntityID := resolveSnapshotEntityID(camera, channel, recorder, session.DeviceID)
+	if snapshotEntityID == 0 {
+		return ""
+	}
+	if session != nil && session.UserID > 0 {
+		return s.captureSnapshot(session, snapshotEntityID, channelNo, eventTime)
+	}
+
+	target, ok, err := s.snapshotLoginTarget(session, camera, recorder, channel)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("resolve hikvision motion snapshot target failed",
+				zap.String("sessionKey", session.SessionKey),
+				zap.Error(err),
+			)
+		}
+		return ""
+	}
+	if !ok {
+		return ""
+	}
+
+	s.mu.Lock()
+	if err := s.ensureSDKLocked(); err != nil {
+		s.mu.Unlock()
+		if s.logger != nil {
+			s.logger.Warn("hikvision snapshot sdk init failed",
+				zap.String("sessionKey", session.SessionKey),
+				zap.Error(err),
+			)
+		}
+		return ""
+	}
+	sdk := s.sdk
+	s.mu.Unlock()
+
+	var (
+		userID     int32
+		deviceInfo hikvision.DeviceInfo
+	)
+	if target.DeviceType == "recorder" {
+		userID, deviceInfo, err = sdk.LoginRecorder(target.DeviceIP, target.SDKPort, target.Username, target.Password)
+	} else {
+		userID, deviceInfo, err = sdk.LoginCamera(target.DeviceIP, target.SDKPort, target.Username, target.Password)
+	}
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("hikvision snapshot login failed",
+				zap.String("sessionKey", session.SessionKey),
+				zap.String("deviceType", target.DeviceType),
+				zap.Uint("deviceId", target.DeviceID),
+				zap.Error(err),
+			)
+		}
+		return ""
+	}
+	defer func() {
+		if err := sdk.Logout(userID); err != nil && s.logger != nil {
+			s.logger.Warn("hikvision snapshot logout failed",
+				zap.String("sessionKey", session.SessionKey),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	snapshotSession := &hikvisionBridgeSession{
+		SessionKey: session.SessionKey,
+		DeviceType: target.DeviceType,
+		DeviceID:   target.DeviceID,
+		DeviceName: target.DeviceName,
+		DeviceIP:   target.DeviceIP,
+		UserID:     userID,
+		DeviceInfo: deviceInfo,
+	}
+	return s.captureSnapshot(snapshotSession, snapshotEntityID, channelNo, eventTime)
+}
+
+func (s *HikvisionAlarmBridgeService) snapshotLoginTarget(
+	session *hikvisionBridgeSession,
+	camera *entity.CameraDevice,
+	recorder *entity.RecorderDevice,
+	channel *entity.RecorderChannel,
+) (hikvisionBridgeTarget, bool, error) {
+	if recorder != nil {
+		password, err := util.ResolveDeviceSecret(s.deviceSecretKey(), recorder.PasswordEncrypted)
+		if err != nil {
+			return hikvisionBridgeTarget{}, false, err
+		}
+		return hikvisionBridgeTarget{
+			SessionKey: fmt.Sprintf("snapshot-recorder:%d", recorder.ID),
+			DeviceType: "recorder",
+			DeviceID:   recorder.ID,
+			DeviceName: recorder.Name,
+			DeviceIP:   recorder.IP,
+			SDKPort:    recorder.SDKPort,
+			Username:   recorder.Username,
+			Password:   password,
+		}, true, nil
+	}
+	if camera != nil {
+		password, err := util.ResolveDeviceSecret(s.deviceSecretKey(), camera.PasswordEncrypted)
+		if err != nil {
+			return hikvisionBridgeTarget{}, false, err
+		}
+		return hikvisionBridgeTarget{
+			SessionKey: fmt.Sprintf("snapshot-camera:%d", camera.ID),
+			DeviceType: "camera",
+			DeviceID:   camera.ID,
+			DeviceName: camera.Name,
+			DeviceIP:   camera.IP,
+			SDKPort:    camera.SDKPort,
+			Username:   camera.Username,
+			Password:   password,
+		}, true, nil
+	}
+	if session != nil && session.DeviceType == "recorder" && session.DeviceID != 0 {
+		var recorderValue entity.RecorderDevice
+		if err := s.repo.DB().First(&recorderValue, session.DeviceID).Error; err != nil {
+			return hikvisionBridgeTarget{}, false, err
+		}
+		return s.snapshotLoginTarget(session, camera, &recorderValue, channel)
+	}
+	if channel != nil && channel.RecorderID != 0 {
+		var recorderValue entity.RecorderDevice
+		if err := s.repo.DB().First(&recorderValue, channel.RecorderID).Error; err != nil {
+			return hikvisionBridgeTarget{}, false, err
+		}
+		return s.snapshotLoginTarget(session, camera, &recorderValue, channel)
+	}
+	return hikvisionBridgeTarget{}, false, nil
 }
 
 func (s *HikvisionAlarmBridgeService) saveAlarmPacketImage(session *hikvisionBridgeSession, entityID uint, eventTime time.Time, image []byte, imageType byte) string {

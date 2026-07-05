@@ -33,6 +33,7 @@ func New(cfg *config.Config, repo *repository.Repository, operationLogService *s
 	engine.Static(cfg.MediaMountPath, cfg.MediaRootDir)
 
 	engine.GET("/healthz", handlers.Query.Health)
+	engine.POST("/smart/events/ingest/:providerCode", handlers.Platform.IngestSmartProviderEvent)
 
 	api := engine.Group("/api")
 	api.POST("/auth/login", handlers.Auth.Login)

@@ -425,7 +425,9 @@ const getAiDecisionText = (value: string) => aiDecisionMetaMap[value]?.text ?? v
 const getParseStatusTone = (value: string) => parseStatusMetaMap[value]?.tone ?? 'info'
 const getParseStatusText = (value: string) => parseStatusMetaMap[value]?.text ?? value
 const canReloadBinding = (record: SmartBindingRecord) =>
-  record.providerCode === 'hikvision-sdk' && record.capabilityCode === 'motion_detect' && record.enabled
+  ['hikvision-sdk', 'hikvision-isapi'].includes(record.providerCode) &&
+  record.capabilityCode === 'motion_detect' &&
+  record.enabled
 const formatAttemptText = (item: SmartBridgeReconnectLogRecord) => {
   if (!item.maxAttempts) return String(item.attempt || 0)
   return `${item.attempt || 0}/${item.maxAttempts}`

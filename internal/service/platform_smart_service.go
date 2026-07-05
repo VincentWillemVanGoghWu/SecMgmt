@@ -145,7 +145,7 @@ func (s *PlatformService) TestSmartProvider(id uint) (map[string]any, error) {
 		return nil, err
 	}
 	checkedAt := time.Now().Format(time.RFC3339)
-	if provider.ProviderCode == "hikvision-sdk" {
+	if shouldReloadHikvisionProvider(provider.ProviderCode) {
 		status := map[string]any{
 			"running":             false,
 			"sessionCount":        0,
@@ -158,20 +158,16 @@ func (s *PlatformService) TestSmartProvider(id uint) (map[string]any, error) {
 		if s.hikvisionBridge != nil {
 			status = s.hikvisionBridge.RuntimeStatus()
 		}
-		running, _ := status["running"].(bool)
-		message := "Hikvision SDK bridge is not running"
-		if running {
-			message = "Hikvision SDK bridge is running"
-		}
+		success, message := hikvisionProviderRuntimeState(provider.ProviderCode, status)
 		if s.logger != nil {
 			s.logger.Info("smart provider test",
 				zap.String("providerCode", provider.ProviderCode),
-				zap.Bool("success", running),
+				zap.Bool("success", success),
 				zap.Any("hikvisionBridgeStatus", status),
 			)
 		}
 		return map[string]any{
-			"success":   running,
+			"success":   success,
 			"message":   message,
 			"checkedAt": checkedAt,
 			"status":    status,
@@ -447,7 +443,7 @@ func (s *PlatformService) testSmartBindingDevice(binding entity.SmartDeviceBindi
 }
 
 func (s *PlatformService) inspectSmartBindingRuntime(binding entity.SmartDeviceBinding, provider entity.SmartInterfaceProvider, capability entity.SmartInterfaceCapability) map[string]any {
-	if provider.ProviderCode != "hikvision-sdk" || capability.CapabilityCode != "motion_detect" {
+	if !shouldReloadHikvisionBinding(provider.ProviderCode, capability.CapabilityCode) {
 		return map[string]any{
 			"supported": false,
 			"success":   true,
@@ -487,7 +483,7 @@ func (s *PlatformService) inspectSmartBindingRuntime(binding entity.SmartDeviceB
 	if s.hikvisionBridge == nil {
 		return result
 	}
-	target, ok, err := s.hikvisionBridge.bindingToTarget(binding)
+	target, ok, err := s.hikvisionBridge.bindingToTargetForProvider(provider.ProviderCode, binding)
 	if err != nil {
 		result["message"] = fmt.Sprintf("bridge 目标解析失败：%v", err)
 		return result
@@ -507,6 +503,10 @@ func (s *PlatformService) inspectSmartBindingRuntime(binding entity.SmartDeviceB
 	if found {
 		result["session"] = session
 	}
+	sessionConnected := provider.ProviderCode != "hikvision-isapi"
+	if provider.ProviderCode == "hikvision-isapi" && found {
+		sessionConnected, _ = session["connected"].(bool)
+	}
 	switch {
 	case !bindingIncluded:
 		result["message"] = "当前绑定未处于可监听状态"
@@ -514,6 +514,8 @@ func (s *PlatformService) inspectSmartBindingRuntime(binding entity.SmartDeviceB
 		result["message"] = "Hikvision SDK bridge 未运行"
 	case !found:
 		result["message"] = fmt.Sprintf("bridge 已运行，但未命中当前绑定会话 %s", target.SessionKey)
+	case !sessionConnected:
+		result["message"] = fmt.Sprintf("ISAPI alertStream 会话已创建但未连接成功：%s", fmt.Sprint(session["lastError"]))
 	default:
 		result["success"] = true
 		result["message"] = fmt.Sprintf("bridge 已命中当前绑定会话 %s", target.SessionKey)
@@ -606,6 +608,54 @@ func (s *PlatformService) latestSmartBindingAlarm(bindingID uint) map[string]any
 		"status":     item.Status,
 		"ageSeconds": ageSeconds(item.AlarmTime),
 		"message":    fmt.Sprintf("最近告警 %s", item.AlarmNo),
+	}
+}
+
+func hikvisionProviderRuntimeState(providerCode string, status map[string]any) (bool, string) {
+	switch providerCode {
+	case "hikvision-isapi":
+		connected := intFromAny(status["isapiConnectedSessionCount"])
+		receiving := intFromAny(status["isapiReceivingSessionCount"])
+		total := intFromAny(status["isapiSessionCount"])
+		if connected > 0 {
+			if receiving == 0 {
+				return true, fmt.Sprintf("Hikvision ISAPI alertStream is connected (%d/%d), but no stream payload has been received yet", connected, total)
+			}
+			return true, fmt.Sprintf("Hikvision ISAPI alertStream is connected (%d/%d)", connected, total)
+		}
+		if total > 0 {
+			return false, fmt.Sprintf("Hikvision ISAPI alertStream is not connected (0/%d): %s", total, fmt.Sprint(status["lastError"]))
+		}
+		return false, "Hikvision ISAPI alertStream has no listening sessions"
+	case "hikvision-sdk":
+		count := intFromAny(status["sdkSessionCount"])
+		if count > 0 {
+			return true, fmt.Sprintf("Hikvision SDK bridge is running (%d sessions)", count)
+		}
+		return false, fmt.Sprintf("Hikvision SDK bridge is not running: %s", fmt.Sprint(status["lastError"]))
+	default:
+		running, _ := status["running"].(bool)
+		if running {
+			return true, "Hikvision bridge is running"
+		}
+		return false, fmt.Sprintf("Hikvision bridge is not running: %s", fmt.Sprint(status["lastError"]))
+	}
+}
+
+func intFromAny(value any) int {
+	switch item := value.(type) {
+	case int:
+		return item
+	case int64:
+		return int(item)
+	case float64:
+		return int(item)
+	case uint:
+		return int(item)
+	case uint64:
+		return int(item)
+	default:
+		return 0
 	}
 }
 

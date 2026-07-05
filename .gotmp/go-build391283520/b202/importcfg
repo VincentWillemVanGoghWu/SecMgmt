@@ -1,0 +1,10 @@
+# import config
+packagefile fmt=D:\VibeCoding\SecmgmtV2\.gocache\8f\8ffde53c5f7916390dd5ca311acb38c82eade225e87681c1c6d2ec203285bbc9-d
+packagefile github.com/gin-gonic/gin=D:\VibeCoding\SecmgmtV2\.gocache\9f\9f198d006dd90947df7662bbf65f57e5d530b1a8279f68d944f9a0555bd084b4-d
+packagefile go.uber.org/zap=D:\VibeCoding\SecmgmtV2\.gocache\53\534b4784a2d28c66dff42d7e061c4ea2a79f6e1f632685cf228f76c0b56abc8a-d
+packagefile secmgmt_go/internal/config=D:\VibeCoding\SecmgmtV2\.gocache\c8\c88a2c302300c398070aad735faffadbac4d52f211ecbccb7b1480630de0f5ba-d
+packagefile secmgmt_go/internal/database=D:\VibeCoding\SecmgmtV2\.gocache\b9\b9eae12fb474ce1d4d13b924a9ae7c57ed2b397174cd1f025707104642510c53-d
+packagefile secmgmt_go/internal/http/handler=D:\VibeCoding\SecmgmtV2\.gotmp\go-build391283520\b337\_pkg_.a
+packagefile secmgmt_go/internal/http/router=D:\VibeCoding\SecmgmtV2\.gotmp\go-build391283520\b352\_pkg_.a
+packagefile secmgmt_go/internal/repository=D:\VibeCoding\SecmgmtV2\.gocache\01\0182526cecb5a4e411312b40b25d119aeeae7a8d8965bf6317a91245ffc50b5f-d
+packagefile secmgmt_go/internal/service=D:\VibeCoding\SecmgmtV2\.gotmp\go-build391283520\b342\_pkg_.a

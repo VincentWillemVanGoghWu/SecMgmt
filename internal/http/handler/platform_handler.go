@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strconv"
@@ -1675,37 +1677,20 @@ func (h *PlatformHandler) IngestSmartProviderEvent(c *gin.Context) {
 }
 
 func readSmartProviderIngestPayload(c *gin.Context) (any, error) {
-	contentType := strings.ToLower(c.GetHeader("Content-Type"))
-	if strings.Contains(contentType, "multipart/form-data") {
-		if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+	rawContentType := c.GetHeader("Content-Type")
+	contentType := strings.ToLower(rawContentType)
+	if strings.HasPrefix(contentType, "multipart/") {
+		return readSmartProviderMultipartPayload(c.Request, rawContentType)
+	}
+	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+		if err := c.Request.ParseForm(); err != nil {
 			return nil, err
 		}
-		files := make([]service.SmartIngestFile, 0)
-		if c.Request.MultipartForm != nil {
-			for _, fileHeaders := range c.Request.MultipartForm.File {
-				for _, fileHeader := range fileHeaders {
-					file, err := fileHeader.Open()
-					if err != nil {
-						return nil, err
-					}
-					data, readErr := io.ReadAll(file)
-					_ = file.Close()
-					if readErr != nil {
-						return nil, readErr
-					}
-					files = append(files, service.SmartIngestFile{
-						Filename:    fileHeader.Filename,
-						ContentType: fileHeader.Header.Get("Content-Type"),
-						Data:        data,
-					})
-				}
-			}
-			return map[string]any{
-				"fields": c.Request.MultipartForm.Value,
-				"files":  files,
-			}, nil
+		fields := make(map[string][]string)
+		for key, values := range c.Request.PostForm {
+			fields[key] = append([]string(nil), values...)
 		}
-		return map[string]any{"files": files}, nil
+		return map[string]any{"fields": fields}, nil
 	}
 	if strings.Contains(contentType, "json") {
 		var payload any
@@ -1718,6 +1703,59 @@ func readSmartProviderIngestPayload(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	return string(body), nil
+}
+
+func readSmartProviderMultipartPayload(request *http.Request, contentType string) (any, error) {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return nil, err
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return nil, fmt.Errorf("multipart boundary is empty")
+	}
+	reader := multipart.NewReader(request.Body, boundary)
+	fields := make(map[string][]string)
+	files := make([]service.SmartIngestFile, 0)
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		data, readErr := io.ReadAll(part)
+		if closeErr := part.Close(); readErr == nil {
+			readErr = closeErr
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+		partContentType := part.Header.Get("Content-Type")
+		normalizedType := strings.ToLower(partContentType)
+		name := part.FormName()
+		if name == "" {
+			name = "body"
+		}
+		filename := part.FileName()
+		if filename != "" || strings.HasPrefix(normalizedType, "image/") {
+			files = append(files, service.SmartIngestFile{
+				Filename:    filename,
+				ContentType: partContentType,
+				Data:        data,
+			})
+			continue
+		}
+		fields[name] = append(fields[name], string(data))
+		if strings.Contains(normalizedType, "xml") || strings.Contains(normalizedType, "json") || strings.Contains(normalizedType, "text") {
+			fields["body"] = append(fields["body"], string(data))
+		}
+	}
+	return map[string]any{
+		"fields": fields,
+		"files":  files,
+	}, nil
 }
 
 func (h *PlatformHandler) ListSmartRawEvents(c *gin.Context) {

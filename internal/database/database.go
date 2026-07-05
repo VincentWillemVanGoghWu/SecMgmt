@@ -126,7 +126,7 @@ func ensureSmartInterfaceProviders(db *gorm.DB) error {
 	if !db.Migrator().HasTable("smart_interface_provider") {
 		return nil
 	}
-	return db.Exec(`
+	if err := db.Exec(`
 INSERT INTO smart_interface_provider
 	(id, provider_code, provider_name, provider_type, auth_type, base_url, callback_path, secret_encrypted, config_schema_json, enabled, remark)
 VALUES
@@ -139,6 +139,19 @@ ON DUPLICATE KEY UPDATE
 	config_schema_json = VALUES(config_schema_json),
 	enabled = VALUES(enabled),
 	remark = VALUES(remark)
+`).Error; err != nil {
+		return err
+	}
+	return db.Exec(`
+UPDATE smart_interface_provider
+SET provider_name = '海康 ISAPI 报警监听',
+	provider_type = 'isapi_listener',
+	auth_type = 'none',
+	callback_path = '/smart/events/ingest/hikvision-isapi',
+	config_schema_json = '{"channelNo": {"type": "number", "label": "通道号"}, "armingMode": {"type": "string", "label": "布防模式"}}',
+	enabled = 1,
+	remark = '系统初始化提供方'
+WHERE provider_code = 'hikvision-isapi'
 `).Error
 }
 
