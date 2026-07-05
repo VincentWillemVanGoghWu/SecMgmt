@@ -780,10 +780,10 @@ func buildCaptureChannelCandidates(deviceInfo DeviceInfo, channelNo int) []int {
 }
 
 func parseMotionAlarm(command int32, pAlarmInfo uintptr) (bool, []int) {
-	if isMotion, channels := parseMotionAlarmV30(command, pAlarmInfo); isMotion {
+	if isMotion, channels := parseMotionAlarmV40(command, pAlarmInfo); isMotion {
 		return true, channels
 	}
-	if isMotion, channels := parseMotionAlarmV40(command, pAlarmInfo); isMotion {
+	if isMotion, channels := parseMotionAlarmV30(command, pAlarmInfo); isMotion {
 		return true, channels
 	}
 	return parseMotionAlarmISAPI(command, pAlarmInfo)
