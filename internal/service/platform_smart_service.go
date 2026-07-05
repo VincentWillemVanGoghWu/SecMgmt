@@ -216,6 +216,35 @@ func (s *PlatformService) ReconnectSmartBinding(id uint) (map[string]any, error)
 	return s.smartBridgeReconnect.ReconnectBindingNow(id)
 }
 
+func (s *PlatformService) ReloadSmartBinding(id uint) (map[string]any, error) {
+	var binding entity.SmartDeviceBinding
+	if err := s.db().First(&binding, id).Error; err != nil {
+		return nil, err
+	}
+	var provider entity.SmartInterfaceProvider
+	if err := s.db().First(&provider, binding.ProviderID).Error; err != nil {
+		return nil, err
+	}
+	var capability entity.SmartInterfaceCapability
+	if err := s.db().First(&capability, binding.CapabilityID).Error; err != nil {
+		return nil, err
+	}
+	if !shouldReloadHikvisionBinding(provider.ProviderCode, capability.CapabilityCode) {
+		return nil, fmt.Errorf("当前绑定不是海康移动侦测绑定，无法重启移动侦测接口")
+	}
+	if !binding.Enabled || !provider.Enabled || !capability.Enabled {
+		return nil, fmt.Errorf("当前绑定/提供方/能力未启用，无法重启移动侦测接口")
+	}
+	s.reloadHikvisionBridgeForBinding(provider.ProviderCode, capability.CapabilityCode, "manual-smart-binding-reload")
+	return map[string]any{
+		"reloaded":       true,
+		"bindingId":      binding.ID,
+		"providerCode":   provider.ProviderCode,
+		"capabilityCode": capability.CapabilityCode,
+		"message":        "移动侦测接口已提交重启",
+	}, nil
+}
+
 func (s *PlatformService) TestSmartBinding(id uint) (map[string]any, error) {
 	var binding entity.SmartDeviceBinding
 	if err := s.db().First(&binding, id).Error; err != nil {

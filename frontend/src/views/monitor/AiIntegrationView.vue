@@ -24,6 +24,7 @@ import {
   listSmartCapabilitiesApi,
   listSmartEventsApi,
   listSmartProvidersApi,
+  reloadSmartBindingApi,
   reconnectSmartBindingApi,
   retrySmartAiTaskApi,
   testSmartBindingApi,
@@ -62,6 +63,7 @@ const ruleSubmitting = ref(false)
 const providerTestingId = ref<number | null>(null)
 const bindingTestingId = ref<number | null>(null)
 const bindingReconnectingId = ref<number | null>(null)
+const bindingReloadingId = ref<number | null>(null)
 const retryingTaskId = ref<number | null>(null)
 
 const activeTab = ref<'providers' | 'bindings' | 'events' | 'reconnectLogs'>('providers')
@@ -422,6 +424,8 @@ const getAiDecisionTone = (value: string) => aiDecisionMetaMap[value]?.tone ?? '
 const getAiDecisionText = (value: string) => aiDecisionMetaMap[value]?.text ?? value
 const getParseStatusTone = (value: string) => parseStatusMetaMap[value]?.tone ?? 'info'
 const getParseStatusText = (value: string) => parseStatusMetaMap[value]?.text ?? value
+const canReloadBinding = (record: SmartBindingRecord) =>
+  record.providerCode === 'hikvision-sdk' && record.capabilityCode === 'motion_detect' && record.enabled
 const formatAttemptText = (item: SmartBridgeReconnectLogRecord) => {
   if (!item.maxAttempts) return String(item.attempt || 0)
   return `${item.attempt || 0}/${item.maxAttempts}`
@@ -829,6 +833,19 @@ const handleReconnectBinding = async (record: SmartBindingRecord) => {
   }
 }
 
+const handleReloadBinding = async (record: SmartBindingRecord) => {
+  bindingReloadingId.value = record.id
+  try {
+    const result = await reloadSmartBindingApi(record.id)
+    ElMessage.success(result.message || '移动侦测接口已提交重启')
+    await Promise.all([loadBridgeStatus(), refreshReconnectLogsIfLoaded()])
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '重启移动侦测接口失败'))
+  } finally {
+    bindingReloadingId.value = null
+  }
+}
+
 const openCreateBindingDialog = async () => {
   await ensureFormOptionsLoaded()
   resetBindingForm()
@@ -1224,6 +1241,13 @@ onMounted(async () => {
                       @click="handleReconnectBinding(item)"
                     >
                       {{ bindingReconnectingId === item.id ? '提交中...' : '重连' }}
+                    </button>
+                    <button
+                      class="app-button app-button--warning smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button"
+                      :disabled="!canReloadBinding(item) || bindingReloadingId === item.id"
+                      @click="handleReloadBinding(item)"
+                    >
+                      {{ bindingReloadingId === item.id ? '重启中...' : '重启' }}
                     </button>
                     <button class="app-button app-button--secondary smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button" @click="openEditBindingDialog(item)">编辑</button>
                     <button class="app-button app-button--danger smart-interface-page__button smart-interface-page__table-button unified-list-page__button unified-list-page__table-button" @click="handleDeleteBinding(item)">
@@ -2228,7 +2252,7 @@ onMounted(async () => {
 }
 
 .smart-interface-page__binding-col-actions {
-  width: 270px;
+  width: 320px;
 }
 
 .smart-interface-page__event-col-code {

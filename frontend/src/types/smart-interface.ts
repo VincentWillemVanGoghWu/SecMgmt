@@ -150,6 +150,14 @@ export interface SmartBindingReconnectResult {
   message: string
 }
 
+export interface SmartBindingReloadResult {
+  reloaded: boolean
+  bindingId: number
+  providerCode: string
+  capabilityCode: string
+  message: string
+}
+
 export interface SmartCapabilityRecord {
   id: number
   capabilityCode: string

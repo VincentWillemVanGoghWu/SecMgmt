@@ -182,6 +182,7 @@ func New(cfg *config.Config, repo *repository.Repository, operationLogService *s
 	protected.GET("/smart/bindings/:id", withPermission("smart:binding:view", handlers.Platform.GetSmartBindingDetail)...)
 	protected.POST("/smart/bindings/:id/test", withPermission("smart:binding:test", handlers.Platform.TestSmartBinding)...)
 	protected.POST("/smart/bindings/:id/reconnect", withPermission("smart:binding:test", handlers.Platform.ReconnectSmartBinding)...)
+	protected.POST("/smart/bindings/:id/reload", withPermission("smart:binding:test", handlers.Platform.ReloadSmartBinding)...)
 	protected.PUT("/smart/bindings/:id", withPermission("smart:binding:update", handlers.Platform.UpdateSmartBinding)...)
 	protected.DELETE("/smart/bindings/:id", withPermission("smart:binding:delete", handlers.Platform.DeleteSmartBinding)...)
 	protected.POST("/smart/bindings/:id/rules", withPermission("smart:rule:create", handlers.Platform.CreateSmartBindingRule)...)

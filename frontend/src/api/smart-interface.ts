@@ -6,6 +6,7 @@ import type {
   SmartAiTaskRecord,
   SmartBindingDetailRecord,
   SmartBindingPageRecord,
+  SmartBindingReloadResult,
   SmartBindingReconnectResult,
   SmartBindingRecord,
   SmartBindingRuleRecord,
@@ -67,6 +68,9 @@ export const testSmartBindingApi = async (id: number): Promise<SmartBindingTestR
 
 export const reconnectSmartBindingApi = async (id: number): Promise<SmartBindingReconnectResult> =>
   unwrap(await http.post<ApiResponse<SmartBindingReconnectResult>>(`/smart/bindings/${id}/reconnect`))
+
+export const reloadSmartBindingApi = async (id: number): Promise<SmartBindingReloadResult> =>
+  unwrap(await http.post<ApiResponse<SmartBindingReloadResult>>(`/smart/bindings/${id}/reload`))
 
 export const getSmartBridgeStatusApi = async (): Promise<SmartBridgeStatusRecord> =>
   unwrap(await http.get<ApiResponse<SmartBridgeStatusRecord>>("/smart/bridge/status"))
