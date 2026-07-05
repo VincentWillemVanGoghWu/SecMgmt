@@ -20,7 +20,11 @@ const (
 	commAlarmV30             = 0x4000
 	commAlarmV40             = 0x4007
 	commISAPIAlarm           = 0x6009
+	localConfigTypeGeneral   = 17
 	motionDetectionAlarmType = 3
+	alarmISAPIPicTypeJPG     = 1
+	maxAlarmImageBytes       = 20 * 1024 * 1024
+	maxFilePathLen           = 256
 	netDVRPlayStart          = 1
 	netDVRPlayGetPos         = 13
 )
@@ -41,10 +45,12 @@ type SessionInfo struct {
 }
 
 type MotionAlarm struct {
-	UserID   int32
-	Command  int32
-	DeviceIP string
-	Channels []int
+	UserID    int32
+	Command   int32
+	DeviceIP  string
+	Channels  []int
+	ImageData []byte
+	ImageType byte
 }
 
 type AlarmHandler func(MotionAlarm)
@@ -59,6 +65,7 @@ type SDK struct {
 	procCleanup            *syscall.LazyProc
 	procSetConnectTime     *syscall.LazyProc
 	procSetReconnect       *syscall.LazyProc
+	procSetSDKLocalCfg     *syscall.LazyProc
 	procGetLastError       *syscall.LazyProc
 	procLoginV40           *syscall.LazyProc
 	procLoginV30           *syscall.LazyProc
@@ -194,6 +201,23 @@ type setupAlarmParam struct {
 	CustomCtrl         byte
 }
 
+type localGeneralConfig struct {
+	ExceptionCbDirectly      byte
+	NotSplitRecordFile       byte
+	ResumeUpgradeEnable      byte
+	AlarmJSONPictureSeparate byte
+	Res                      [4]byte
+	FileSize                 uint64
+	ResumeUpgradeTimeout     uint32
+	AlarmReconnectMode       byte
+	StdXMLBufferSize         byte
+	Multiplexing             byte
+	FastUpgrade              byte
+	AlarmPrealloc            byte
+	ChangeEventIPToDomain    byte
+	Res1                     [230]byte
+}
+
 type alarmInfoV30 struct {
 	AlarmType          uint32
 	AlarmInputNumber   uint32
@@ -255,6 +279,14 @@ type alarmISAPIInfo struct {
 	Res1         [32]byte
 }
 
+type alarmISAPIPicData struct {
+	PicLen   uint32
+	PicType  byte
+	Res      [3]byte
+	Filename [maxFilePathLen]byte
+	PicData  uintptr
+}
+
 func NewSDK(sdkPath string) (*SDK, error) {
 	root := strings.TrimSpace(sdkPath)
 	if root == "" {
@@ -314,6 +346,7 @@ func (s *SDK) Init() error {
 	procCleanup := dll.NewProc("NET_DVR_Cleanup")
 	procSetConnectTime := dll.NewProc("NET_DVR_SetConnectTime")
 	procSetReconnect := dll.NewProc("NET_DVR_SetReconnect")
+	procSetSDKLocalCfg := dll.NewProc("NET_DVR_SetSDKLocalCfg")
 	procGetLastError := dll.NewProc("NET_DVR_GetLastError")
 	procLoginV40 := dll.NewProc("NET_DVR_Login_V40")
 	procLoginV30 := dll.NewProc("NET_DVR_Login_V30")
@@ -334,12 +367,24 @@ func (s *SDK) Init() error {
 	}
 	procSetConnectTime.Call(uintptr(3000), uintptr(1))
 	procSetReconnect.Call(uintptr(10000), uintptr(1))
+	localCfg := localGeneralConfig{
+		ExceptionCbDirectly:      1,
+		AlarmJSONPictureSeparate: 1,
+	}
+	if ret, _, _ := procSetSDKLocalCfg.Call(
+		uintptr(localConfigTypeGeneral),
+		uintptr(unsafe.Pointer(&localCfg)),
+	); ret == 0 {
+		procCleanup.Call()
+		return fmt.Errorf("NET_DVR_SetSDKLocalCfg failed, code=%d", s.lastErrorCode(procGetLastError))
+	}
 
 	s.dll = dll
 	s.procInit = procInit
 	s.procCleanup = procCleanup
 	s.procSetConnectTime = procSetConnectTime
 	s.procSetReconnect = procSetReconnect
+	s.procSetSDKLocalCfg = procSetSDKLocalCfg
 	s.procGetLastError = procGetLastError
 	s.procLoginV40 = procLoginV40
 	s.procLoginV30 = procLoginV30
@@ -712,12 +757,15 @@ func (s *SDK) messageCallback(lCommand, pAlarmer, pAlarmInfo, _dwBufLen, _pUser 
 	if len(channels) == 0 {
 		channels = []int{1}
 	}
+	imageData, imageType := extractMotionAlarmImage(int32(lCommand), pAlarmInfo)
 	if handler != nil {
 		go handler(MotionAlarm{
-			UserID:   userID,
-			Command:  int32(lCommand),
-			DeviceIP: deviceIP,
-			Channels: channels,
+			UserID:    userID,
+			Command:   int32(lCommand),
+			DeviceIP:  deviceIP,
+			Channels:  channels,
+			ImageData: imageData,
+			ImageType: imageType,
 		})
 	}
 	return 1
@@ -848,6 +896,30 @@ func parseMotionAlarmISAPI(command int32, pAlarmInfo uintptr) (bool, []int) {
 	}
 	payload := unsafe.Slice((*byte)(unsafe.Pointer(info.AlarmData)), info.AlarmDataLen)
 	return parseMotionAlarmPayload(payload)
+}
+
+func extractMotionAlarmImage(command int32, pAlarmInfo uintptr) ([]byte, byte) {
+	if command != commISAPIAlarm || pAlarmInfo == 0 {
+		return nil, 0
+	}
+	info := (*alarmISAPIInfo)(unsafe.Pointer(pAlarmInfo))
+	if info.PicPackData == 0 || info.PicturesNum == 0 {
+		return nil, 0
+	}
+	pictures := unsafe.Slice((*alarmISAPIPicData)(unsafe.Pointer(info.PicPackData)), int(info.PicturesNum))
+	for _, picture := range pictures {
+		if picture.PicType != 0 && picture.PicType != alarmISAPIPicTypeJPG {
+			continue
+		}
+		if picture.PicData == 0 || picture.PicLen == 0 || picture.PicLen > maxAlarmImageBytes {
+			continue
+		}
+		data := unsafe.Slice((*byte)(unsafe.Pointer(picture.PicData)), int(picture.PicLen))
+		image := make([]byte, len(data))
+		copy(image, data)
+		return image, picture.PicType
+	}
+	return nil, 0
 }
 
 func parseMotionAlarmPayload(payload []byte) (bool, []int) {

@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -622,7 +623,7 @@ func (s *HikvisionAlarmBridgeService) handleAlarm(alarm hikvision.MotionAlarm) {
 
 	for _, rawChannelNo := range alarm.Channels {
 		channelNo := hikvision.NormalizeAlarmChannelNo(session.DeviceInfo, rawChannelNo)
-		if err := s.aggregateMotionEvent(session, alarm.DeviceIP, rawChannelNo, channelNo, int(alarm.Command)); err != nil {
+		if err := s.persistMotionEvent(session, alarm.DeviceIP, rawChannelNo, channelNo, int(alarm.Command), alarm.ImageData, alarm.ImageType); err != nil {
 			s.logger.Error("persist hikvision motion event failed",
 				zap.String("sessionKey", session.SessionKey),
 				zap.Int("channelNo", channelNo),
@@ -992,6 +993,8 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 	rawChannelNo int,
 	channelNo int,
 	command int,
+	alarmImage []byte,
+	alarmImageType byte,
 ) error {
 	eventTime := time.Now()
 	unlockPersist := s.lockAlarmDedupKey(fmt.Sprintf("motion-persist:%s:%d", session.SessionKey, channelNo))
@@ -1045,6 +1048,11 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 		if provider == nil || capability == nil || binding == nil {
 			return nil
 		}
+		snapshotURL := ""
+		if len(alarmImage) > 0 && shouldCaptureMotionSnapshot(rule, entity.SmartEvent{}) {
+			snapshotEntityID := resolveSnapshotEntityID(camera, channel, recorder, session.DeviceID)
+			snapshotURL = s.saveAlarmPacketImage(session, snapshotEntityID, eventTime, alarmImage, alarmImageType)
+		}
 		payload := map[string]any{
 			"capabilityCode": "motion_detect",
 			"eventType":      "motion_detect",
@@ -1061,7 +1069,10 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 			"sourceIp":       deviceIP,
 			"command":        command,
 			"confidence":     1,
-			"imageUrl":       nil,
+			"imageUrl":       nullableStringValue(snapshotURL),
+		}
+		if snapshotURL != "" {
+			payload["imageSource"] = "sdk-alarm-package"
 		}
 		rawEventID := fmt.Sprintf("hikvision-motion:%s:%d:%d:%s", binding.SourceType, binding.SourceID, channelNo, uuid.NewString()[:12])
 		headers := map[string]string{"x-hikvision-bridge": "sdk-callback"}
@@ -1102,29 +1113,14 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 			ChannelID:             nullableEntityID(channel),
 			FactoryID:             firstFactoryID(camera, recorder, channel),
 			ZoneID:                firstZoneID(camera, channel),
+			ImageURL:              snapshotURL,
 			Confidence:            floatPtr(1),
 			DedupKey:              buildSmartDedupKey(binding.SourceType, binding.SourceID, channelNo, firstZoneID(camera, channel)),
 			NormalizedPayloadJSON: rawEvent.RawPayloadJSON,
 			Status:                "stored",
 		}
-		smartEvent, err = s.createOrMergeSmartEvent(tx, smartEvent)
-		if err != nil {
+		if err := tx.Create(&smartEvent).Error; err != nil {
 			return err
-		}
-		if shouldCaptureMotionSnapshot(rule, smartEvent) {
-			snapshotEntityID := resolveSnapshotEntityID(camera, channel, recorder, session.DeviceID)
-			if snapshotURL := s.captureSnapshot(session, snapshotEntityID, channelNo, eventTime); snapshotURL != "" {
-				payload["imageUrl"] = nullableStringValue(snapshotURL)
-				rawEvent.RawPayloadJSON = marshalJSON(payload)
-				if err := tx.Save(&rawEvent).Error; err != nil {
-					return err
-				}
-				smartEvent.ImageURL = snapshotURL
-				smartEvent.NormalizedPayloadJSON = rawEvent.RawPayloadJSON
-				if err := tx.Save(&smartEvent).Error; err != nil {
-					return err
-				}
-			}
 		}
 
 		if rule != nil && rule.AlarmEnabled && rule.GenerateAlarmDirectly {
@@ -1430,6 +1426,40 @@ func (s *HikvisionAlarmBridgeService) captureSnapshot(session *hikvisionBridgeSe
 		return ""
 	}
 	return s.buildSnapshotURL(snapshotPath)
+}
+
+func (s *HikvisionAlarmBridgeService) saveAlarmPacketImage(session *hikvisionBridgeSession, entityID uint, eventTime time.Time, image []byte, imageType byte) string {
+	if session == nil || entityID == 0 || len(image) == 0 {
+		return ""
+	}
+	if imageType != 0 && imageType != 1 {
+		return ""
+	}
+	if !looksLikeJPEG(image) {
+		return ""
+	}
+	snapshotPath := s.buildSnapshotPath(entityID, eventTime)
+	if err := os.MkdirAll(filepath.Dir(snapshotPath), 0o755); err != nil {
+		s.logger.Warn("create hikvision alarm packet image dir failed",
+			zap.String("sessionKey", session.SessionKey),
+			zap.Uint("entityId", entityID),
+			zap.Error(err),
+		)
+		return ""
+	}
+	if err := os.WriteFile(snapshotPath, image, 0o644); err != nil {
+		s.logger.Warn("write hikvision alarm packet image failed",
+			zap.String("sessionKey", session.SessionKey),
+			zap.Uint("entityId", entityID),
+			zap.Error(err),
+		)
+		return ""
+	}
+	return s.buildSnapshotURL(snapshotPath)
+}
+
+func looksLikeJPEG(data []byte) bool {
+	return len(data) >= 2 && data[0] == 0xff && data[1] == 0xd8
 }
 
 func (s *HikvisionAlarmBridgeService) buildSnapshotPath(entityID uint, eventTime time.Time) string {

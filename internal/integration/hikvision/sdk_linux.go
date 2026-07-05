@@ -29,6 +29,9 @@ const (
 	commAlarmV40             = 0x4007
 	commISAPIAlarm           = 0x6009
 	motionDetectionAlarmType = 3
+	alarmISAPIPicTypeJPG     = 1
+	maxAlarmImageBytes       = 20 * 1024 * 1024
+	maxFilePathLen           = 256
 	netDVRPlayStart          = 1
 	netDVRPlayGetPos         = 13
 )
@@ -49,10 +52,12 @@ type SessionInfo struct {
 }
 
 type MotionAlarm struct {
-	UserID   int32
-	Command  int32
-	DeviceIP string
-	Channels []int
+	UserID    int32
+	Command   int32
+	DeviceIP  string
+	Channels  []int
+	ImageData []byte
+	ImageType byte
 }
 
 type AlarmHandler func(MotionAlarm)
@@ -199,6 +204,14 @@ type alarmISAPIInfo struct {
 	Res          [2]byte
 	PicPackData  uintptr
 	Res1         [32]byte
+}
+
+type alarmISAPIPicData struct {
+	PicLen   uint32
+	PicType  byte
+	Res      [3]byte
+	Filename [maxFilePathLen]byte
+	PicData  uintptr
 }
 
 var (
@@ -564,12 +577,15 @@ func (s *SDK) messageCallback(command int32, pAlarmer unsafe.Pointer, pAlarmInfo
 	if len(channels) == 0 {
 		channels = []int{1}
 	}
+	imageData, imageType := extractMotionAlarmImage(command, uintptr(pAlarmInfo))
 	if handler != nil {
 		go handler(MotionAlarm{
-			UserID:   userID,
-			Command:  command,
-			DeviceIP: deviceIP,
-			Channels: channels,
+			UserID:    userID,
+			Command:   command,
+			DeviceIP:  deviceIP,
+			Channels:  channels,
+			ImageData: imageData,
+			ImageType: imageType,
 		})
 	}
 	return true
@@ -728,6 +744,30 @@ func parseMotionAlarmISAPI(command int32, pAlarmInfo uintptr) (bool, []int) {
 	}
 	payload := unsafe.Slice((*byte)(unsafe.Pointer(info.AlarmData)), info.AlarmDataLen)
 	return parseMotionAlarmPayload(payload)
+}
+
+func extractMotionAlarmImage(command int32, pAlarmInfo uintptr) ([]byte, byte) {
+	if command != commISAPIAlarm || pAlarmInfo == 0 {
+		return nil, 0
+	}
+	info := (*alarmISAPIInfo)(unsafe.Pointer(pAlarmInfo))
+	if info.PicPackData == 0 || info.PicturesNum == 0 {
+		return nil, 0
+	}
+	pictures := unsafe.Slice((*alarmISAPIPicData)(unsafe.Pointer(info.PicPackData)), int(info.PicturesNum))
+	for _, picture := range pictures {
+		if picture.PicType != 0 && picture.PicType != alarmISAPIPicTypeJPG {
+			continue
+		}
+		if picture.PicData == 0 || picture.PicLen == 0 || picture.PicLen > maxAlarmImageBytes {
+			continue
+		}
+		data := unsafe.Slice((*byte)(unsafe.Pointer(picture.PicData)), int(picture.PicLen))
+		image := make([]byte, len(data))
+		copy(image, data)
+		return image, picture.PicType
+	}
+	return nil, 0
 }
 
 func parseMotionAlarmPayload(payload []byte) (bool, []int) {

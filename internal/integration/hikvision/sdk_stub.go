@@ -23,10 +23,12 @@ type SessionInfo struct {
 }
 
 type MotionAlarm struct {
-	UserID   int32
-	Command  int32
-	DeviceIP string
-	Channels []int
+	UserID    int32
+	Command   int32
+	DeviceIP  string
+	Channels  []int
+	ImageData []byte
+	ImageType byte
 }
 
 type AlarmHandler func(MotionAlarm)
