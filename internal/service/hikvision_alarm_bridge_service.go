@@ -698,25 +698,6 @@ func (s *HikvisionAlarmBridgeService) collectTargets(providerCodes ...string) ([
 		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	if containsString(providerCodes, "hikvision-isapi") {
-		var isapiProvider entity.SmartInterfaceProvider
-		if err := s.repo.DB().Where("provider_code = ? AND enabled = ?", "hikvision-isapi", true).First(&isapiProvider).Error; err != nil && err != gorm.ErrRecordNotFound {
-			return nil, err
-		} else if err == nil {
-			var inheritedRows []bindingRow
-			if err := s.repo.DB().
-				Table("smart_device_binding AS b").
-				Select("b.*, ? AS provider_code, c.capability_code", "hikvision-isapi").
-				Joins("JOIN smart_interface_provider p ON p.id = b.provider_id").
-				Joins("JOIN smart_interface_capability c ON c.id = b.capability_id").
-				Where("b.enabled = ? AND p.enabled = ? AND c.enabled = ? AND p.provider_code = ? AND c.capability_code = ?", true, true, true, "hikvision-sdk", "motion_detect").
-				Scan(&inheritedRows).Error; err != nil {
-				return nil, err
-			}
-			rows = append(rows, inheritedRows...)
-		}
-	}
-
 	targetMap := make(map[string]hikvisionBridgeTarget)
 	s.bindingCount = len(rows)
 	s.skippedBindingCount = 0
@@ -1602,7 +1583,7 @@ func (s *HikvisionAlarmBridgeService) handleAlarm(alarm hikvision.MotionAlarm) {
 
 	for _, rawChannelNo := range alarm.Channels {
 		channelNo := hikvision.NormalizeAlarmChannelNo(session.DeviceInfo, rawChannelNo)
-		if err := s.persistMotionEventForProvider("hikvision-sdk", session, alarm.DeviceIP, rawChannelNo, channelNo, int(alarm.Command), alarm.ImageData, alarm.ImageType); err != nil {
+		if err := s.persistMotionEventForProvider("hikvision-sdk", session, alarm.DeviceIP, rawChannelNo, channelNo, int(alarm.Command), alarm.EventTime, alarm.ImageData, alarm.ImageType); err != nil {
 			if errors.Is(err, errHikvisionMotionBindingNotMatched) {
 				continue
 			}
@@ -1642,7 +1623,7 @@ func (s *HikvisionAlarmBridgeService) IngestISAPIMotionEvent(providerCode string
 	if event.RawChannelNo <= 0 {
 		event.RawChannelNo = event.ChannelNo
 	}
-	if err := s.persistMotionEventForProvider(providerCode, session, event.DeviceIP, event.RawChannelNo, event.ChannelNo, 0x6009, event.ImageData, event.ImageType); err != nil {
+	if err := s.persistMotionEventForProvider(providerCode, session, event.DeviceIP, event.RawChannelNo, event.ChannelNo, 0x6009, event.EventTime, event.ImageData, event.ImageType); err != nil {
 		if errors.Is(err, errHikvisionMotionBindingNotMatched) {
 			s.logger.Warn("hikvision isapi event ignored",
 				zap.String("reason", "smart binding not matched"),
@@ -1674,6 +1655,7 @@ type hikvisionISAPIMotionEvent struct {
 	DeviceIP     string
 	RawChannelNo int
 	ChannelNo    int
+	EventTime    *time.Time
 	ImageData    []byte
 	ImageType    byte
 }
@@ -1691,6 +1673,7 @@ func parseHikvisionISAPIMotionPayload(payload any, headers map[string]string) (h
 	}
 	event.ChannelNo = firstPayloadInt(values, "channelID", "channelNo", "channel", "dynChannelID", "inputProxyChannelID")
 	event.RawChannelNo = event.ChannelNo
+	event.EventTime = firstPayloadTime(values, "dateTime", "eventTime", "alarmTime", "triggerTime", "time")
 	if event.ChannelNo <= 0 {
 		event.ChannelNo = extractChannelNoFromText(bodyText)
 		event.RawChannelNo = event.ChannelNo
@@ -1854,6 +1837,42 @@ func firstPayloadText(values []flattenedPayloadValue, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstPayloadTime(values []flattenedPayloadValue, keys ...string) *time.Time {
+	for _, key := range keys {
+		for _, item := range values {
+			if !strings.EqualFold(strings.TrimSpace(item.Key), key) {
+				continue
+			}
+			if parsed := parseHikvisionCallbackTime(item.Value); parsed != nil {
+				return parsed
+			}
+		}
+	}
+	return nil
+}
+
+func parseHikvisionCallbackTime(value string) *time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		local := parsed.Local()
+		return &local
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006/01/02 15:04:05",
+		"20060102150405",
+	} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return &parsed
+		}
+	}
+	return nil
 }
 
 func firstPayloadInt(values []flattenedPayloadValue, keys ...string) int {
@@ -2400,7 +2419,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionAggregate(window *motionAggre
 			if err := tx.Save(&smartEvent).Error; err != nil {
 				return err
 			}
-			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, window.FirstEventTime, window.ChannelNo, window.DeviceIP, window.Rule)
+			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, window.FirstEventTime, time.Now(), window.ChannelNo, window.DeviceIP, window.Rule)
 			if err != nil {
 				return err
 			}
@@ -2437,7 +2456,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionEvent(
 	alarmImage []byte,
 	alarmImageType byte,
 ) error {
-	return s.persistMotionEventForProvider("hikvision-sdk", session, deviceIP, rawChannelNo, channelNo, command, alarmImage, alarmImageType)
+	return s.persistMotionEventForProvider("hikvision-sdk", session, deviceIP, rawChannelNo, channelNo, command, nil, alarmImage, alarmImageType)
 }
 
 func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
@@ -2447,10 +2466,15 @@ func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
 	rawChannelNo int,
 	channelNo int,
 	command int,
+	callbackEventTime *time.Time,
 	_ []byte,
 	_ byte,
 ) error {
-	eventTime := time.Now()
+	receiveTime := time.Now()
+	eventTime := receiveTime
+	if callbackEventTime != nil && !callbackEventTime.IsZero() {
+		eventTime = callbackEventTime.Local()
+	}
 	unlockPersist := s.lockAlarmDedupKey(fmt.Sprintf("motion-persist:%s:%d", session.SessionKey, channelNo))
 	defer unlockPersist()
 	var alarmToPush *entity.AlarmRecord
@@ -2510,6 +2534,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
 			"capabilityCode": "motion_detect",
 			"eventType":      "motion_detect",
 			"eventTime":      eventTime.Format(time.RFC3339),
+			"receiveTime":    receiveTime.Format(time.RFC3339),
 			"sourceType":     binding.SourceType,
 			"sourceId":       binding.SourceID,
 			"cameraId":       nullableUintValue(camera),
@@ -2582,7 +2607,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
 			if err := tx.Save(&smartEvent).Error; err != nil {
 				return err
 			}
-			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, eventTime, channelNo, deviceIP, rule)
+			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, eventTime, receiveTime, channelNo, deviceIP, rule)
 			if err != nil {
 				return err
 			}
@@ -2759,22 +2784,6 @@ func (s *HikvisionAlarmBridgeService) matchMotionBindingForProvider(
 	if binding != nil {
 		return provider, capability, binding, rule, nil
 	}
-	if providerCode == "hikvision-isapi" {
-		var sdkProvider entity.SmartInterfaceProvider
-		err := tx.Where("provider_code = ? AND enabled = ?", "hikvision-sdk", true).First(&sdkProvider).Error
-		if err != nil && err != gorm.ErrRecordNotFound {
-			return nil, nil, nil, nil, err
-		}
-		if err == nil {
-			binding, rule, err = findBinding(sdkProvider.ID)
-			if err != nil {
-				return nil, nil, nil, nil, err
-			}
-			if binding != nil {
-				return provider, capability, binding, rule, nil
-			}
-		}
-	}
 	return provider, capability, nil, nil, nil
 }
 
@@ -2783,6 +2792,7 @@ func (s *HikvisionAlarmBridgeService) createOrMergeMotionAlarm(
 	smartEvent entity.SmartEvent,
 	rawEvent entity.SmartRawEvent,
 	eventTime time.Time,
+	receiveTime time.Time,
 	channelNo int,
 	deviceIP string,
 	rule *entity.SmartBindingRule,
@@ -2878,7 +2888,7 @@ func (s *HikvisionAlarmBridgeService) createOrMergeMotionAlarm(
 		ToStatus:     "pending",
 		OperatorName: "system",
 		Remark:       fmt.Sprintf("海康移动侦测报警自动生成，通道 %d", channelNo),
-		CreatedAt:    eventTime,
+		CreatedAt:    receiveTime,
 	}
 	if err := tx.Create(&processLog).Error; err != nil {
 		return "", nil, err

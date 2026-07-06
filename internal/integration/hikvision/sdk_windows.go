@@ -49,6 +49,7 @@ type MotionAlarm struct {
 	Command   int32
 	DeviceIP  string
 	Channels  []int
+	EventTime *time.Time
 	ImageData []byte
 	ImageType byte
 }
@@ -758,12 +759,14 @@ func (s *SDK) messageCallback(lCommand, pAlarmer, pAlarmInfo, _dwBufLen, _pUser 
 		channels = []int{1}
 	}
 	imageData, imageType := extractMotionAlarmImage(int32(lCommand), pAlarmInfo)
+	eventTime := extractMotionAlarmEventTime(int32(lCommand), pAlarmInfo)
 	if handler != nil {
 		go handler(MotionAlarm{
 			UserID:    userID,
 			Command:   int32(lCommand),
 			DeviceIP:  deviceIP,
 			Channels:  channels,
+			EventTime: eventTime,
 			ImageData: imageData,
 			ImageType: imageType,
 		})
@@ -922,6 +925,40 @@ func extractMotionAlarmImage(command int32, pAlarmInfo uintptr) ([]byte, byte) {
 	return nil, 0
 }
 
+func extractMotionAlarmEventTime(command int32, pAlarmInfo uintptr) *time.Time {
+	if pAlarmInfo == 0 {
+		return nil
+	}
+	switch command {
+	case commAlarmV40:
+		info := (*alarmInfoV40)(unsafe.Pointer(pAlarmInfo))
+		return dvrTimeExToTime(info.Fixed.AlarmTime)
+	case commISAPIAlarm:
+		info := (*alarmISAPIInfo)(unsafe.Pointer(pAlarmInfo))
+		if info.AlarmData == 0 || info.AlarmDataLen == 0 {
+			return nil
+		}
+		payload := unsafe.Slice((*byte)(unsafe.Pointer(info.AlarmData)), info.AlarmDataLen)
+		return parseMotionAlarmPayloadTime(payload)
+	default:
+		return nil
+	}
+}
+
+func dvrTimeExToTime(value dvrTimeEx) *time.Time {
+	year := int(value.Year)
+	month := time.Month(value.Month)
+	day := int(value.Day)
+	hour := int(value.Hour)
+	minute := int(value.Minute)
+	second := int(value.Second)
+	if year < 1970 || month < time.January || month > time.December || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59 {
+		return nil
+	}
+	parsed := time.Date(year, month, day, hour, minute, second, 0, time.Local)
+	return &parsed
+}
+
 func parseMotionAlarmPayload(payload []byte) (bool, []int) {
 	text := strings.TrimSpace(string(payload))
 	if text == "" {
@@ -941,6 +978,108 @@ func parseMotionAlarmPayload(payload []byte) (bool, []int) {
 	}
 
 	return textContainsMotionEvent(text), extractChannelNumbersFromText(text)
+}
+
+func parseMotionAlarmPayloadTime(payload []byte) *time.Time {
+	text := strings.TrimSpace(string(payload))
+	if text == "" {
+		return nil
+	}
+	if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+		var parsed any
+		if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+			if value := firstTimeTextFromJSON(parsed); value != "" {
+				return parseHikvisionCallbackTime(value)
+			}
+		}
+	}
+	var root xmlNode
+	if err := xml.Unmarshal([]byte(text), &root); err == nil {
+		if value := firstTimeTextFromXML(root); value != "" {
+			return parseHikvisionCallbackTime(value)
+		}
+	}
+	for _, pattern := range []*regexp.Regexp{
+		regexp.MustCompile(`(?i)<(?:dateTime|eventTime|alarmTime|triggerTime|time)>\s*([^<]+)\s*</`),
+		regexp.MustCompile(`(?i)"(?:dateTime|eventTime|alarmTime|triggerTime|time)"\s*:\s*"([^"]+)"`),
+	} {
+		if match := pattern.FindStringSubmatch(text); len(match) > 1 {
+			if parsed := parseHikvisionCallbackTime(match[1]); parsed != nil {
+				return parsed
+			}
+		}
+	}
+	return nil
+}
+
+func firstTimeTextFromJSON(value any) string {
+	switch item := value.(type) {
+	case map[string]any:
+		for key, child := range item {
+			if isEventTimeField(key) {
+				text := strings.TrimSpace(fmt.Sprint(child))
+				if text != "" && text != "<nil>" {
+					return text
+				}
+			}
+			if text := firstTimeTextFromJSON(child); text != "" {
+				return text
+			}
+		}
+	case []any:
+		for _, child := range item {
+			if text := firstTimeTextFromJSON(child); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func firstTimeTextFromXML(root xmlNode) string {
+	tag := strings.ToLower(tagName(root.XMLName.Local))
+	if isEventTimeField(tag) {
+		if text := strings.TrimSpace(root.Content); text != "" {
+			return text
+		}
+	}
+	for _, child := range root.Nodes {
+		if text := firstTimeTextFromXML(child); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func parseHikvisionCallbackTime(value string) *time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		local := parsed.Local()
+		return &local
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006/01/02 15:04:05",
+		"20060102150405",
+	} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func isEventTimeField(value string) bool {
+	switch strings.ToLower(tagName(strings.TrimSpace(value))) {
+	case "datetime", "eventtime", "alarmtime", "triggertime", "time":
+		return true
+	default:
+		return false
+	}
 }
 
 type xmlNode struct {

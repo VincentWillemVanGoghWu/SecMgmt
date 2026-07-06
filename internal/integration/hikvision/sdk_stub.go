@@ -27,6 +27,7 @@ type MotionAlarm struct {
 	Command   int32
 	DeviceIP  string
 	Channels  []int
+	EventTime *time.Time
 	ImageData []byte
 	ImageType byte
 }

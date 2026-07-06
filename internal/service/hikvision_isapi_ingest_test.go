@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseHikvisionISAPIMotionPayloadXML(t *testing.T) {
@@ -11,6 +12,7 @@ func TestParseHikvisionISAPIMotionPayloadXML(t *testing.T) {
 		<channelID>3</channelID>
 		<eventType>VMD</eventType>
 		<eventState>active</eventState>
+		<dateTime>2026-07-06T07:39:06+08:00</dateTime>
 	</EventNotificationAlert>`
 
 	event, ok := parseHikvisionISAPIMotionPayload(payload, map[string]string{})
@@ -22,6 +24,9 @@ func TestParseHikvisionISAPIMotionPayloadXML(t *testing.T) {
 	}
 	if event.ChannelNo != 3 {
 		t.Fatalf("unexpected channel no: %d", event.ChannelNo)
+	}
+	if event.EventTime == nil || event.EventTime.Format(time.RFC3339) != "2026-07-06T07:39:06+08:00" {
+		t.Fatalf("unexpected event time: %v", event.EventTime)
 	}
 }
 
@@ -111,7 +116,8 @@ func TestParseHikvisionISAPIMotionPayloadJSONString(t *testing.T) {
 		"ipAddress": "192.168.1.66",
 		"channelID": 7,
 		"eventType": "VMD",
-		"eventState": "active"
+		"eventState": "active",
+		"eventTime": "2026-07-06 07:40:11"
 	}`
 
 	event, ok := parseHikvisionISAPIMotionPayload(payload, map[string]string{})
@@ -123,6 +129,9 @@ func TestParseHikvisionISAPIMotionPayloadJSONString(t *testing.T) {
 	}
 	if event.ChannelNo != 7 {
 		t.Fatalf("unexpected channel no: %d", event.ChannelNo)
+	}
+	if event.EventTime == nil || event.EventTime.Format("2006-01-02 15:04:05") != "2026-07-06 07:40:11" {
+		t.Fatalf("unexpected event time: %v", event.EventTime)
 	}
 }
 

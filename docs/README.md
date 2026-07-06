@@ -42,6 +42,7 @@
 - [配置项说明](configuration.md)：后端、前端、Docker Compose、SDK、媒体目录和生产配置检查。
 - [开发、部署与运维](development-deployment.md)：本地启动、构建、Docker Compose、Ubuntu 部署和运维要点。
 - [测试与验收文档](testing.md)：后端、前端、数据库、接口、设备、视频、告警、推送、AI 的验收清单。
+- [告警 AI 复核开发建议](ai-alarm-review-design.md)：告警生成后自动排队调用视觉模型、Prompt/JSON 协议、结果回写与等级调整方案。
 - [常见问题排查手册](troubleshooting.md)：登录、接口、数据库、SDK、视频、SSE、推送、Docker 等问题排查。
 - [安全与已知约束](security-known-issues.md)：当前安全机制、上线前必须整改项和风险建议。
 
