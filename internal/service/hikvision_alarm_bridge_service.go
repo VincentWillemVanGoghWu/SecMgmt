@@ -2419,13 +2419,14 @@ func (s *HikvisionAlarmBridgeService) persistMotionAggregate(window *motionAggre
 			if err := tx.Save(&smartEvent).Error; err != nil {
 				return err
 			}
-			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, window.FirstEventTime, time.Now(), window.ChannelNo, window.DeviceIP, window.Rule)
+			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, window.FirstEventTime, window.LastEventTime, time.Now(), window.ChannelNo, window.DeviceIP, window.Rule)
 			if err != nil {
 				return err
 			}
 			if alarm != nil && action != "cooldown_suppressed" {
 				alarm.OccurrenceCount += maxInt(window.Count-1, 0)
 				alarm.LastEventTime = timePtr(window.LastEventTime)
+				alarm.RecordEndTime = timePtr(window.LastEventTime.Add(90 * time.Second))
 				if err := tx.Save(alarm).Error; err != nil {
 					return err
 				}
@@ -2607,7 +2608,7 @@ func (s *HikvisionAlarmBridgeService) persistMotionEventForProvider(
 			if err := tx.Save(&smartEvent).Error; err != nil {
 				return err
 			}
-			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, eventTime, receiveTime, channelNo, deviceIP, rule)
+			action, alarm, err := s.createOrMergeMotionAlarm(tx, smartEvent, rawEvent, eventTime, eventTime, receiveTime, channelNo, deviceIP, rule)
 			if err != nil {
 				return err
 			}
@@ -2792,6 +2793,7 @@ func (s *HikvisionAlarmBridgeService) createOrMergeMotionAlarm(
 	smartEvent entity.SmartEvent,
 	rawEvent entity.SmartRawEvent,
 	eventTime time.Time,
+	lastEventTime time.Time,
 	receiveTime time.Time,
 	channelNo int,
 	deviceIP string,
@@ -2830,7 +2832,8 @@ func (s *HikvisionAlarmBridgeService) createOrMergeMotionAlarm(
 				existing.ImageURL = smartEvent.ImageURL
 			}
 			existing.OccurrenceCount++
-			existing.LastEventTime = timePtr(eventTime)
+			existing.LastEventTime = timePtr(lastEventTime)
+			existing.RecordEndTime = timePtr(lastEventTime.Add(90 * time.Second))
 			if err := tx.Save(&existing).Error; err != nil {
 				return "", nil, err
 			}
@@ -2872,11 +2875,11 @@ func (s *HikvisionAlarmBridgeService) createOrMergeMotionAlarm(
 		ImageURL:        smartEvent.ImageURL,
 		VideoURL:        smartEvent.VideoURL,
 		RecordStartTime: timePtr(eventTime.Add(-30 * time.Second)),
-		RecordEndTime:   timePtr(eventTime.Add(90 * time.Second)),
+		RecordEndTime:   timePtr(lastEventTime.Add(90 * time.Second)),
 		PushRecordsJSON: "[]",
 		DedupKey:        dedupKey,
 		OccurrenceCount: 1,
-		LastEventTime:   timePtr(eventTime),
+		LastEventTime:   timePtr(lastEventTime),
 	}
 	if err := tx.Create(&alarm).Error; err != nil {
 		return "", nil, err
